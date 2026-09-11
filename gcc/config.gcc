@@ -1877,6 +1877,11 @@ amdgcn-*-amdhsa)
 	gcc_cv_initfini_array=yes
 	thread_file=gcn
 	;;
+fructus-*-elf*)
+	gas=yes
+	gnu_ld=yes
+	tm_file="elfos.h newlib-stdint.h ${tm_file}"
+	;;
 moxie-*-elf)
 	gas=yes
 	gnu_ld=yes

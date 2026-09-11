@@ -1,0 +1,42 @@
+# Makefile fragment for building libgcc for Fructus.
+# Copyright (C) 2026 Free Software Foundation, Inc.
+#
+# This file is part of GCC.
+#
+# GCC is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published
+# by the Free Software Foundation; either version 3, or (at your
+# option) any later version.
+#
+# GCC is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.   See
+# the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public
+# License along with GCC; see the file COPYING3.  If not see
+# <http://www.gnu.org/licenses/>.
+
+# libgcc2.c is built with 32-bit words (LIBGCC2_UNITS_PER_WORD in fructus.h),
+# so what it provides are the 64-bit "double word" routines.  The 16- and
+# 32-bit ones are here:
+#
+#   lib1funcs.S     __mulhi3 __mulsi3 __umulhisi3 __mulhisi3 __umulsidi3,
+#                   hand written - a copy of libgcc/lib1funcs.s in the
+#                   fructus repository, whose suite checks the two agree.
+#                   Assembled through lib1funcs-globl.S, which exports them.
+#   lib2div.c       16- and 32-bit division and remainder
+#   lib2shift.c     32-bit shifts by a variable count
+#   lib2bitcountHI.c  16-bit clz/ctz/popcount/parity/ffs, shared with msp430
+
+LIB2ADD = \
+	$(srcdir)/config/fructus/lib1funcs-globl.S \
+	$(srcdir)/config/fructus/lib2div.c \
+	$(srcdir)/config/fructus/lib2shift.c \
+	$(srcdir)/config/msp430/lib2bitcountHI.c
+
+HOST_LIBGCC2_CFLAGS += -Os
+
+# C only: no exceptions, so no unwinder, and no __builtin_eh_return to build
+# one with.
+LIB2ADDEH =
