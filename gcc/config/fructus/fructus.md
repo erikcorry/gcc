@@ -272,6 +272,20 @@
    <shift_insn>\t%0, %1, #%2
    <shift_insn>\t%0, %1, %2")
 
+;; A 64-bit shift by 16, 32 or 48 is register moves, which GCC does not find
+;; on its own: it expands a two-word shift inline and calls a libcall for a
+;; four-word one.  Any other count still goes to the libcall, by failing.
+(define_expand "<shift_name>di3"
+  [(set (match_operand:DI 0 "register_operand")
+	(shift:DI (match_operand:DI 1 "register_operand")
+		  (match_operand:HI 2 "nonmemory_operand")))]
+  ""
+{
+  if (!fructus_expand_word_shift (operands, <CODE>))
+    FAIL;
+  DONE;
+})
+
 (define_insn "clzhi2"
   [(set (match_operand:HI 0 "register_operand" "=r")
 	(clz:HI (match_operand:HI 1 "register_operand" "r")))]

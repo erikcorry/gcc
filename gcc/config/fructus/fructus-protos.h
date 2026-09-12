@@ -48,6 +48,7 @@ extern int fructus_rsb_length (rtx *);
 extern int fructus_iseq_length (rtx *, bool);
 
 extern bool fructus_expand_move (rtx *, machine_mode);
+extern bool fructus_expand_word_shift (rtx *, enum rtx_code);
 extern void fructus_split_double_move (rtx *, machine_mode);
 extern bool fructus_expand_sub (rtx *);
 extern void fructus_expand_cbranch (rtx *, machine_mode);

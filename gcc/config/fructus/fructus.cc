@@ -1210,6 +1210,67 @@ fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total, bool)
 }
 
 /* ==========================================================================
+   Multiword shifts by a whole number of words
+
+   Those are register moves and a fill, and GCC does not find them by itself
+   for a four-word value: it expands a TWO-word shift inline and falls back to
+   a libcall for anything wider.  That is how `(unsigned long long) q << 32'
+   became a call to __ashldi3 - a variable 64-bit shift, with the constant 32
+   pushed on the stack - at 76 cycles where two moves would do.
+
+   Anything that is not a constant multiple of the word size still goes to the
+   libcall, which the expander does by failing.
+   ========================================================================== */
+
+bool
+fructus_expand_word_shift (rtx *operands, enum rtx_code code)
+{
+  machine_mode mode = GET_MODE (operands[0]);
+  int words = GET_MODE_SIZE (mode) / UNITS_PER_WORD;
+
+  if (!CONST_INT_P (operands[2]))
+    return false;
+
+  HOST_WIDE_INT n = INTVAL (operands[2]);
+  if (n <= 0 || n % BITS_PER_WORD != 0)
+    return false;
+
+  int k = n / BITS_PER_WORD;
+  if (k >= words)
+    return false;		/* nothing of the value survives */
+
+  rtx dst = operands[0], src = operands[1], fill = const0_rtx;
+
+  if (code == ASHIFTRT)
+    {
+      /* The vacated words are all copies of the sign bit.  */
+      rtx top = simplify_gen_subreg (HImode, src, mode,
+				     (words - 1) * UNITS_PER_WORD);
+      fill = gen_reg_rtx (HImode);
+      emit_insn (gen_ashrhi3 (fill, force_reg (HImode, top), GEN_INT (15)));
+    }
+
+  /* Left shifts move words up, so they copy from the top down; right shifts
+     move them down, so they copy from the bottom up.  Either way a word is
+     read before anything overwrites it, which is what makes this safe when
+     the destination is also the source.  */
+  for (int i = 0; i < words; i++)
+    {
+      int to = code == ASHIFT ? words - 1 - i : i;
+      int from = code == ASHIFT ? to - k : to + k;
+      rtx d = simplify_gen_subreg (HImode, dst, mode, to * UNITS_PER_WORD);
+      rtx s = (from >= 0 && from < words)
+	      ? simplify_gen_subreg (HImode, src, mode,
+				     from * UNITS_PER_WORD)
+	      : fill;
+      if (!d || !s)
+	return false;
+      emit_move_insn (d, s);
+    }
+  return true;
+}
+
+/* ==========================================================================
    Division
 
    libgcc's __udivmodhi4 returns BOTH results - the quotient in r0 and the
