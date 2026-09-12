@@ -45,6 +45,7 @@
 #include "recog.h"
 #include "insn-attr.h"
 #include "optabs.h"
+#include "optabs-libfuncs.h"
 #include "explow.h"
 #include "opts.h"
 #include "tm-constrs.h"
@@ -1209,6 +1210,43 @@ fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total, bool)
 }
 
 /* ==========================================================================
+   Division
+
+   libgcc's __udivmodhi4 returns BOTH results - the quotient in r0 and the
+   remainder in r1, which is one 32-bit value under isa/abi.s.  Registering it
+   as the udivmod libfunc lets the divmod pass turn `x / 10' and `x % 10',
+   which is every digit of every number printed, into one call instead of two
+   divisions.
+
+   Only the unsigned one: there is no hand-written signed __divmodhi4, and
+   without a libfunc the pass leaves signed division alone.
+   ========================================================================== */
+
+static void
+fructus_init_libfuncs (void)
+{
+  set_optab_libfunc (udivmod_optab, HImode, "__udivmodhi4");
+}
+
+static void
+fructus_expand_divmod_libfunc (rtx libfunc, machine_mode mode, rtx op0,
+			       rtx op1, rtx *quot, rtx *rem)
+{
+  gcc_assert (mode == HImode);
+
+  rtx pair = emit_library_call_value (libfunc, NULL_RTX, LCT_CONST, SImode,
+				      op0, mode, op1, mode);
+
+  /* THE QUOTIENT IS THE HIGH WORD, which is where this differs from every
+     other port doing this: r0 holds the high half of a register pair, and the
+     quotient is in r0.  */
+  *quot = simplify_gen_subreg (mode, pair, SImode, GET_MODE_SIZE (mode));
+  *rem = simplify_gen_subreg (mode, pair, SImode, 0);
+
+  gcc_assert (*quot && *rem);
+}
+
+/* ==========================================================================
    Options
    ========================================================================== */
 
@@ -1287,6 +1325,11 @@ fructus_option_override (void)
 #define TARGET_RTX_COSTS fructus_rtx_costs
 #undef  TARGET_SHIFT_TRUNCATION_MASK
 #define TARGET_SHIFT_TRUNCATION_MASK fructus_shift_truncation_mask
+
+#undef  TARGET_INIT_LIBFUNCS
+#define TARGET_INIT_LIBFUNCS fructus_init_libfuncs
+#undef  TARGET_EXPAND_DIVMOD_LIBFUNC
+#define TARGET_EXPAND_DIVMOD_LIBFUNC fructus_expand_divmod_libfunc
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

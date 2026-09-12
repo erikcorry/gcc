@@ -11,5 +11,10 @@
 	.globl	__mulhisi3
 	.globl	__mulsi3
 	.globl	__umulsidi3
+	.globl	__udivmodhi4
+	.globl	__udivhi3
+	.globl	__umodhi3
+	.globl	__divhi3
+	.globl	__modhi3
 
 #include "lib1funcs.S"

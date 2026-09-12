@@ -35,15 +35,9 @@ typedef int word_type __attribute__ ((mode (__word__)));
 #define C3B(a,b,c) a##b##c
 #define C3(a,b,c) C3B(a,b,c)
 
-#define UINT_TYPE	uint16_type
-#define SINT_TYPE	sint16_type
-#define BITS_MINUS_1	15
-#define NAME_MODE	hi
-#include "../msp430/msp430-divmod.h"
-#undef UINT_TYPE
-#undef SINT_TYPE
-#undef BITS_MINUS_1
-#undef NAME_MODE
+/* The 16-bit half is not here: __udivmodhi4 and its four wrappers are hand
+   written, in lib1funcs.S.  They cost 46 cycles where this loop costs 326,
+   which matters because dividing by ten is how every number is printed.  */
 
 #define UINT_TYPE	uint32_type
 #define SINT_TYPE	sint32_type
