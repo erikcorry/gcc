@@ -40,3 +40,8 @@ HOST_LIBGCC2_CFLAGS += -Os
 # C only: no exceptions, so no unwinder, and no __builtin_eh_return to build
 # one with.
 LIB2ADDEH =
+
+# Nor unwind tables in the 64-bit division routines, which libgcc otherwise
+# builds with -fexceptions so that a trap could unwind through them.  Nothing
+# here traps, and the tables only made ld complain about .eh_frame.
+LIB2_DIVMOD_EXCEPTION_FLAGS := -fno-exceptions
