@@ -1161,23 +1161,38 @@ fructus_insn_callee_abi (const rtx_insn *insn)
    is an argument there and destroyed.  `mov r2, r1; mov r1, #0; jmpr
    memset' would return to bzero's caller with r2 in pieces.
 
-   An indirect call is never a tail call.  There is no jump through a
-   register on this machine, only `mov lr, rx' and `ret' - and lr is holding
-   the return address the tail call exists to pass on.
+   AN INDIRECT CALL IS ASKED THE SAME QUESTION, of the pointer's type - which
+   is all a call site ever knew about its callee anyway, and the same type the
+   UNSPEC_CALLEE_CC cookie is computed from, so the two agree by construction.
+   A call through a pointer whose type says four arguments may not be tail
+   called from a function that promised to preserve r2 and r3, exactly as if
+   it had been named.
 
-   Nor is a call from a function with pretend arguments: a varargs function
-   has its register arguments pushed below its frame, and the epilogue above
-   does not pop them.  */
+   A call from a function with pretend arguments is refused: a varargs
+   function has its register arguments pushed below its frame, and the
+   epilogue above does not pop them.  */
 
 static bool
-fructus_function_ok_for_sibcall (tree decl, tree exp ATTRIBUTE_UNUSED)
+fructus_function_ok_for_sibcall (tree decl, tree exp)
 {
-  if (decl == NULL_TREE || crtl->args.pretend_args_size != 0)
+  if (crtl->args.pretend_args_size != 0)
     return false;
 
-  return hard_reg_set_subset_p
-	   (fructus_fntype_abi (TREE_TYPE (decl)).full_reg_clobbers (),
-	    crtl->abi->full_reg_clobbers ());
+  tree fntype = NULL_TREE;
+  if (decl != NULL_TREE)
+    fntype = TREE_TYPE (decl);
+  else if (exp != NULL_TREE)
+    {
+      tree fn = CALL_EXPR_FN (exp);
+      tree type = fn != NULL_TREE ? TREE_TYPE (fn) : NULL_TREE;
+      if (type != NULL_TREE && POINTER_TYPE_P (type))
+	fntype = TREE_TYPE (type);
+    }
+  if (fntype == NULL_TREE || !FUNC_OR_METHOD_TYPE_P (fntype))
+    return false;
+
+  return hard_reg_set_subset_p (fructus_fntype_abi (fntype).full_reg_clobbers (),
+				crtl->abi->full_reg_clobbers ());
 }
 
 /* The return value: r0, r0:r1 or r0:r1:r2:r3, high to low - and for an

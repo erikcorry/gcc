@@ -507,34 +507,45 @@
 			   (le (minus (match_dup 0) (pc)) (const_int 120)))
 		      (const_int 2) (const_int 3)))])
 
-;; There is no jump through a register.  `ret' is pc = lr, so an indirect
-;; jump goes through lr - which is why these clobber it, and why a function
-;; with a switch table saves lr like a function that makes calls.
+;; A jump through a register is `jmp r5', so the address goes to r5 first.
+;; It used to go through lr - `mov lr, ra' and `ret' - which cost the same
+;; three bytes but DESTROYED THE RETURN ADDRESS, so a function with a switch
+;; table had to save lr as though it made calls.  Now it does not.
+;;
+;; r5 rather than a register the allocator picks, because there is no class
+;; that names one register, and because r5 is the one that is expendable
+;; everywhere: caller saved in all three ABIs, never an argument or a return
+;; value, and untouched by any epilogue - which is what lets a tail call
+;; through a pointer put its target here and still unwind afterwards.
 (define_expand "indirect_jump"
-  [(parallel [(set (pc) (match_operand:HI 0 "register_operand"))
-	      (clobber (reg:HI LR_REGNUM))])]
-  "")
+  [(set (pc) (match_operand:HI 0 "register_operand"))]
+  ""
+{
+  emit_move_insn (gen_rtx_REG (HImode, R5_REGNUM), operands[0]);
+  operands[0] = gen_rtx_REG (HImode, R5_REGNUM);
+})
 
 (define_insn "*indirect_jump"
-  [(set (pc) (match_operand:HI 0 "register_operand" "r"))
-   (clobber (reg:HI LR_REGNUM))]
+  [(set (pc) (reg:HI R5_REGNUM))]
   ""
-  "mov\tlr, %0\n\tret"
-  [(set_attr "length" "3")])
+  "jmp\tr5"
+  [(set_attr "length" "1")])
 
 (define_expand "tablejump"
   [(parallel [(set (pc) (match_operand:HI 0 "register_operand"))
-	      (use (label_ref (match_operand 1 "")))
-	      (clobber (reg:HI LR_REGNUM))])]
-  "")
+	      (use (label_ref (match_operand 1 "")))])]
+  ""
+{
+  emit_move_insn (gen_rtx_REG (HImode, R5_REGNUM), operands[0]);
+  operands[0] = gen_rtx_REG (HImode, R5_REGNUM);
+})
 
 (define_insn "*tablejump"
-  [(set (pc) (match_operand:HI 0 "register_operand" "r"))
-   (use (label_ref (match_operand 1 "")))
-   (clobber (reg:HI LR_REGNUM))]
+  [(set (pc) (reg:HI R5_REGNUM))
+   (use (label_ref (match_operand 0 "")))]
   ""
-  "mov\tlr, %0\n\tret"
-  [(set_attr "length" "3")])
+  "jmp\tr5"
+  [(set_attr "length" "1")])
 
 ;; -------------------------------------------------------------------------
 ;; Calls.  Each carries its callee's ABI id, from the end-marker cookie,
@@ -588,10 +599,12 @@
 ;; caller: the epilogue runs first, leaving that return address in lr, and
 ;; two bytes and a return are saved over `call' followed by `ret'.
 ;;
-;; ONLY TO A SYMBOL.  An indirect jump here is `mov lr, rx' and `ret', which
-;; would destroy the very return address the tail call exists to pass along,
-;; so fructus_function_ok_for_sibcall refuses a call with no declaration and
-;; the address below is always an address.
+;; A SYMBOL GOES IN THE JUMP, ANYTHING ELSE GOES THROUGH r5.  An indirect tail
+;; call was impossible until the machine had `jmp r5': through lr it would
+;; have destroyed the very return address it exists to pass along.  r5 is safe
+;; to stage it in because no epilogue touches r5 - it is caller saved in all
+;; three ABIs - so the move below survives the unwinding that the sibcall
+;; epilogue does between here and the jump.
 ;;
 ;; Whether a tail call is allowed AT ALL is a question about the sliding
 ;; convention, not about the frame: see fructus_function_ok_for_sibcall.
@@ -603,9 +616,24 @@
 	      (use (unspec:HI [(match_operand 2 "")] UNSPEC_CALLEE_CC))])]
   ""
 {
+  rtx addr = XEXP (operands[0], 0);
+  if (!fructus_sibcall_operand (addr, Pmode))
+    {
+      emit_move_insn (gen_rtx_REG (Pmode, R5_REGNUM), addr);
+      operands[0] = gen_rtx_MEM (QImode, gen_rtx_REG (Pmode, R5_REGNUM));
+    }
   if (operands[2] == NULL_RTX)
     operands[2] = const0_rtx;
 })
+
+(define_insn "*sibcall_reg"
+  [(call (mem:QI (reg:HI R5_REGNUM))
+	 (match_operand 0 "" ""))
+   (use (unspec:HI [(match_operand 1 "const_int_operand" "")]
+		   UNSPEC_CALLEE_CC))]
+  "SIBLING_CALL_P (insn)"
+  "jmp\tr5"
+  [(set_attr "length" "1")])
 
 (define_insn "*sibcall"
   [(call (mem:QI (match_operand:HI 0 "fructus_sibcall_operand" "i"))
@@ -623,9 +651,25 @@
 	      (use (unspec:HI [(match_operand 3 "")] UNSPEC_CALLEE_CC))])]
   ""
 {
+  rtx addr = XEXP (operands[1], 0);
+  if (!fructus_sibcall_operand (addr, Pmode))
+    {
+      emit_move_insn (gen_rtx_REG (Pmode, R5_REGNUM), addr);
+      operands[1] = gen_rtx_MEM (QImode, gen_rtx_REG (Pmode, R5_REGNUM));
+    }
   if (operands[3] == NULL_RTX)
     operands[3] = const0_rtx;
 })
+
+(define_insn "*sibcall_value_reg"
+  [(set (match_operand 0 "" "")
+	(call (mem:QI (reg:HI R5_REGNUM))
+	      (match_operand 1 "" "")))
+   (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
+		   UNSPEC_CALLEE_CC))]
+  "SIBLING_CALL_P (insn)"
+  "jmp\tr5"
+  [(set_attr "length" "1")])
 
 (define_insn "*sibcall_value"
   [(set (match_operand 0 "" "")
