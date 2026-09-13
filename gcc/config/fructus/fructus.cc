@@ -762,7 +762,7 @@ fructus_expand_prologue (void)
 }
 
 void
-fructus_expand_epilogue (void)
+fructus_expand_epilogue (bool sibcall)
 {
   machine_function *m = cfun->machine;
 
@@ -783,7 +783,10 @@ fructus_expand_epilogue (void)
       fructus_emit_pop (regs, n);
     }
 
-  emit_jump_insn (gen_fructus_return ());
+  /* A tail call is its own return: the jump that follows this reaches the
+     callee, whose `ret' goes to our caller through the lr just restored.  */
+  if (!sibcall)
+    emit_jump_insn (gen_fructus_return ());
 }
 
 static bool
@@ -1142,6 +1145,39 @@ fructus_insn_callee_abi (const rtx_insn *insn)
 	  return fructus_abi (INTVAL (XVECEXP (XEXP (x, 0), 0, 0)));
       }
   return default_function_abi;
+}
+
+/* Whether a call to DECL may become a tail call.
+
+   THE SLIDING CONVENTION DECIDES THIS, and not the frame.  A tail call
+   leaves the callee running with our caller's return address, so the
+   callee's clobbers become ours: everything it destroys we must already
+   have been entitled to destroy, or our caller finds a register gone.  The
+   three ABIs nest - id 2 clobbers less than id 1, which clobbers less than
+   id 0 - so the question is a subset test.
+
+   It refuses exactly the case libc/memset.s documents by hand: bzero takes
+   two arguments, so r2 is callee saved in it, and memset takes three, so r2
+   is an argument there and destroyed.  `mov r2, r1; mov r1, #0; jmpr
+   memset' would return to bzero's caller with r2 in pieces.
+
+   An indirect call is never a tail call.  There is no jump through a
+   register on this machine, only `mov lr, rx' and `ret' - and lr is holding
+   the return address the tail call exists to pass on.
+
+   Nor is a call from a function with pretend arguments: a varargs function
+   has its register arguments pushed below its frame, and the epilogue above
+   does not pop them.  */
+
+static bool
+fructus_function_ok_for_sibcall (tree decl, tree exp ATTRIBUTE_UNUSED)
+{
+  if (decl == NULL_TREE || crtl->args.pretend_args_size != 0)
+    return false;
+
+  return hard_reg_set_subset_p
+	   (fructus_fntype_abi (TREE_TYPE (decl)).full_reg_clobbers (),
+	    crtl->abi->full_reg_clobbers ());
 }
 
 /* The return value: r0, r0:r1 or r0:r1:r2:r3, high to low - and for an
@@ -1536,6 +1572,8 @@ fructus_option_override (void)
 #define TARGET_FNTYPE_ABI fructus_fntype_abi
 #undef  TARGET_INSN_CALLEE_ABI
 #define TARGET_INSN_CALLEE_ABI fructus_insn_callee_abi
+#undef  TARGET_FUNCTION_OK_FOR_SIBCALL
+#define TARGET_FUNCTION_OK_FOR_SIBCALL fructus_function_ok_for_sibcall
 
 #undef  TARGET_CAN_ELIMINATE
 #define TARGET_CAN_ELIMINATE fructus_can_eliminate

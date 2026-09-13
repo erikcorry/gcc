@@ -557,7 +557,7 @@
 	 (match_operand 1 "" ""))
    (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
-  ""
+  "!SIBLING_CALL_P (insn)"
   "call\t%0"
   [(set_attr "length" "3,2")])
 
@@ -579,9 +579,63 @@
 	      (match_operand 2 "" "")))
    (use (unspec:HI [(match_operand 3 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
-  ""
+  "!SIBLING_CALL_P (insn)"
   "call\t%1"
   [(set_attr "length" "3,2")])
+
+;; -------------------------------------------------------------------------
+;; Tail calls.  A tail call is a jump, so the callee's `ret' returns to OUR
+;; caller: the epilogue runs first, leaving that return address in lr, and
+;; two bytes and a return are saved over `call' followed by `ret'.
+;;
+;; ONLY TO A SYMBOL.  An indirect jump here is `mov lr, rx' and `ret', which
+;; would destroy the very return address the tail call exists to pass along,
+;; so fructus_function_ok_for_sibcall refuses a call with no declaration and
+;; the address below is always an address.
+;;
+;; Whether a tail call is allowed AT ALL is a question about the sliding
+;; convention, not about the frame: see fructus_function_ok_for_sibcall.
+;; -------------------------------------------------------------------------
+
+(define_expand "sibcall"
+  [(parallel [(call (match_operand:QI 0 "memory_operand")
+		    (match_operand 1 ""))
+	      (use (unspec:HI [(match_operand 2 "")] UNSPEC_CALLEE_CC))])]
+  ""
+{
+  if (operands[2] == NULL_RTX)
+    operands[2] = const0_rtx;
+})
+
+(define_insn "*sibcall"
+  [(call (mem:QI (match_operand:HI 0 "fructus_sibcall_operand" "i"))
+	 (match_operand 1 "" ""))
+   (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
+		   UNSPEC_CALLEE_CC))]
+  "SIBLING_CALL_P (insn)"
+  "jmpr\t%0"
+  [(set_attr "length" "3")])
+
+(define_expand "sibcall_value"
+  [(parallel [(set (match_operand 0 "")
+		   (call (match_operand:QI 1 "memory_operand")
+			 (match_operand 2 "")))
+	      (use (unspec:HI [(match_operand 3 "")] UNSPEC_CALLEE_CC))])]
+  ""
+{
+  if (operands[3] == NULL_RTX)
+    operands[3] = const0_rtx;
+})
+
+(define_insn "*sibcall_value"
+  [(set (match_operand 0 "" "")
+	(call (mem:QI (match_operand:HI 1 "fructus_sibcall_operand" "i"))
+	      (match_operand 2 "" "")))
+   (use (unspec:HI [(match_operand 3 "const_int_operand" "")]
+		   UNSPEC_CALLEE_CC))]
+  "SIBLING_CALL_P (insn)"
+  "jmpr\t%1"
+  [(set_attr "length" "3")])
 
 ;; -------------------------------------------------------------------------
 ;; Prologue and epilogue
@@ -599,7 +653,18 @@
   [(return)]
   ""
 {
-  fructus_expand_epilogue ();
+  fructus_expand_epilogue (false);
+  DONE;
+})
+
+;; The same unwinding, but the jump that follows it is the tail call, so
+;; there is no `ret' of our own.  lr is restored here like any other saved
+;; register: it is what the callee will return through.
+(define_expand "sibcall_epilogue"
+  [(const_int 0)]
+  ""
+{
+  fructus_expand_epilogue (true);
   DONE;
 })
 

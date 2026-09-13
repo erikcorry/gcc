@@ -28,7 +28,7 @@ extern bool fructus_mask5_p (HOST_WIDE_INT);
 
 extern HOST_WIDE_INT fructus_initial_elimination_offset (int, int);
 extern void fructus_expand_prologue (void);
-extern void fructus_expand_epilogue (void);
+extern void fructus_expand_epilogue (bool);
 
 #ifdef TREE_CODE
 extern void fructus_init_cumulative_args (CUMULATIVE_ARGS *, tree,
