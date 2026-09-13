@@ -868,14 +868,131 @@ fructus_init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype,
     cum->ret_regs = fructus_value_regs (libcall_mode);
 }
 
+/* ==========================================================================
+   Aggregates are decomposed into their fields
+
+   isa/abi.s: "Structs are decomposed into their fields and each field is
+   assigned independently - there is no such thing as passing a struct."  A
+   field of any size up to 16 bits takes a WHOLE register, which is why the
+   limit is four REGISTERS rather than eight bytes: `struct { char a, b, c,
+   d, e; }' is five registers and goes through memory even though it is five
+   bytes.
+
+   What is not decomposed, because the ABI's rule does not reach it: a union
+   or a bitfield, whose fields share storage and so have no independent
+   assignment, and anything needing more than the four argument registers.
+   Those go through memory, which the ABI already provides for.
+   ========================================================================== */
+
+#define FRUCTUS_MAX_FIELDS 4
+
+struct fructus_fields
+{
+  int n;					/* fields found */
+  int regs;					/* registers they need */
+  HOST_WIDE_INT offset[FRUCTUS_MAX_FIELDS];	/* byte offset in the value */
+  machine_mode mode[FRUCTUS_MAX_FIELDS];
+};
+
+static bool
+fructus_collect_fields (const_tree type, HOST_WIDE_INT offset,
+			struct fructus_fields *f)
+{
+  switch (TREE_CODE (type))
+    {
+    case RECORD_TYPE:
+      for (tree field = TYPE_FIELDS (type); field; field = DECL_CHAIN (field))
+	{
+	  if (TREE_CODE (field) != FIELD_DECL)
+	    continue;
+	  if (DECL_BIT_FIELD (field) || !tree_fits_shwi_p (bit_position (field)))
+	    return false;
+	  HOST_WIDE_INT bits = int_bit_position (field);
+	  if (bits % BITS_PER_UNIT)
+	    return false;
+	  if (!fructus_collect_fields (TREE_TYPE (field),
+				       offset + bits / BITS_PER_UNIT, f))
+	    return false;
+	}
+      return true;
+
+    case ARRAY_TYPE:
+      {
+	HOST_WIDE_INT size = int_size_in_bytes (type);
+	HOST_WIDE_INT esize = int_size_in_bytes (TREE_TYPE (type));
+	if (size <= 0 || esize <= 0)
+	  return false;
+	for (HOST_WIDE_INT at = 0; at < size; at += esize)
+	  if (!fructus_collect_fields (TREE_TYPE (type), offset + at, f))
+	    return false;
+	return true;
+      }
+
+    case UNION_TYPE:
+    case QUAL_UNION_TYPE:
+      return false;
+
+    default:
+      {
+	HOST_WIDE_INT size = int_size_in_bytes (type);
+	machine_mode mode = TYPE_MODE (type);
+	if (size <= 0 || mode == BLKmode || f->n >= FRUCTUS_MAX_FIELDS)
+	  return false;
+	f->offset[f->n] = offset;
+	f->mode[f->n] = mode;
+	f->n++;
+	f->regs += fructus_value_regs (mode);
+	return f->regs <= 4;
+      }
+    }
+}
+
+/* TYPE's fields, or false if it goes through memory instead.  */
+
+static bool
+fructus_decompose (const_tree type, struct fructus_fields *f)
+{
+  f->n = 0;
+  f->regs = 0;
+  if (!type || !AGGREGATE_TYPE_P (type)
+      || !TYPE_SIZE (type) || !tree_fits_uhwi_p (TYPE_SIZE (type)))
+    return false;
+  return fructus_collect_fields (type, 0, f) && f->n > 0;
+}
+
+/* ARG's fields, when they all reach registers.  Returns how many there are,
+   or zero if the aggregate goes on the stack instead.
+
+   ALL OR NOTHING, which is the no-splitting rule read at the struct rather
+   than the field: an aggregate whose fields do not all fit is placed whole
+   on the stack, wasting at most the registers that were left.  Letting it
+   straddle is what GCC's pretend_args_size is for, and it would put the
+   rebuilding of the struct in every callee's prologue - byte by byte, since
+   a char field takes a whole register and one byte of stack.  */
+
+static int
+fructus_arg_fields (const CUMULATIVE_ARGS *cum, const function_arg_info &arg,
+		    struct fructus_fields *f)
+{
+  if (!arg.named || cum->stack || !fructus_decompose (arg.type, f))
+    return 0;
+  return cum->nregs + f->regs <= 4 ? f->n : 0;
+}
+
 /* Registers ARG takes, or 0 if it goes on the stack.  */
 
 static int
 fructus_arg_regs (const CUMULATIVE_ARGS *cum, const function_arg_info &arg)
 {
-  if (!arg.named || cum->stack || arg.aggregate_type_p ()
-      || arg.mode == BLKmode)
+  if (!arg.named || cum->stack)
     return 0;
+
+  if (arg.aggregate_type_p () || arg.mode == BLKmode)
+    {
+      struct fructus_fields f;
+      return fructus_arg_fields (cum, arg, &f) ? f.regs : 0;
+    }
+
   int n = fructus_value_regs (arg.mode);
   if (n == 0 || cum->nregs + n > 4)
     return 0;
@@ -927,6 +1044,28 @@ fructus_abi (unsigned id)
   return abi;
 }
 
+/* The registers ARG's fields occupy, as a PARALLEL of register and byte
+   offset - which is how GCC is told that a value arrives in pieces.  */
+
+static rtx
+fructus_fields_rtx (const struct fructus_fields *f, int k, int first,
+		    machine_mode mode)
+{
+  rtx slot[FRUCTUS_MAX_FIELDS];
+  int p = first;
+
+  for (int i = 0; i < k; i++)
+    {
+      int need = fructus_value_regs (f->mode[i]);
+      slot[i] = gen_rtx_EXPR_LIST (VOIDmode,
+				   gen_rtx_REG (f->mode[i],
+						fructus_arg_regno (p, need)),
+				   GEN_INT (f->offset[i]));
+      p += need;
+    }
+  return gen_rtx_PARALLEL (mode, gen_rtvec_v (k, slot));
+}
+
 static rtx
 fructus_function_arg (cumulative_args_t cum_v, const function_arg_info &arg)
 {
@@ -934,6 +1073,16 @@ fructus_function_arg (cumulative_args_t cum_v, const function_arg_info &arg)
 
   if (arg.end_marker_p ())
     return GEN_INT (fructus_abi_id (cum));
+
+  if (arg.named && !cum->stack
+      && (arg.aggregate_type_p () || arg.mode == BLKmode))
+    {
+      struct fructus_fields f;
+      int k = fructus_arg_fields (cum, arg, &f);
+      if (k == 0)
+	return NULL_RTX;
+      return fructus_fields_rtx (&f, k, cum->nregs, arg.mode);
+    }
 
   int n = fructus_arg_regs (cum, arg);
   if (n == 0)
@@ -995,12 +1144,21 @@ fructus_insn_callee_abi (const rtx_insn *insn)
   return default_function_abi;
 }
 
-/* The return value: r0, r0:r1 or r0:r1:r2:r3, high to low.  */
+/* The return value: r0, r0:r1 or r0:r1:r2:r3, high to low - and for an
+   aggregate, its fields from r0 upward, exactly as they would be passed.  */
 
 static rtx
 fructus_function_value (const_tree valtype, const_tree, bool)
 {
   machine_mode mode = TYPE_MODE (valtype);
+
+  if (AGGREGATE_TYPE_P (valtype))
+    {
+      struct fructus_fields f;
+      if (fructus_decompose (valtype, &f))
+	return fructus_fields_rtx (&f, f.n, 0, mode);
+    }
+
   return gen_rtx_REG (mode, fructus_arg_regno (0, fructus_value_regs (mode)));
 }
 
@@ -1016,18 +1174,20 @@ fructus_function_value_regno_p (const unsigned int regno)
   return regno >= FRUCTUS_R3 && regno <= FRUCTUS_R0;
 }
 
+/* An aggregate comes back in registers when its fields fit in four, and
+   through the caller's hidden pointer when they do not.  */
+
 static bool
 fructus_return_in_memory (const_tree type, const_tree)
 {
-  HOST_WIDE_INT size = int_size_in_bytes (type);
-  return (AGGREGATE_TYPE_P (type) || TYPE_MODE (type) == BLKmode
-	  || size < 0 || size > 8);
-}
+  if (AGGREGATE_TYPE_P (type))
+    {
+      struct fructus_fields f;
+      return !fructus_decompose (type, &f);
+    }
 
-static bool
-fructus_must_pass_in_stack (const function_arg_info &arg)
-{
-  return arg.aggregate_type_p () || arg.mode == BLKmode;
+  HOST_WIDE_INT size = int_size_in_bytes (type);
+  return size < 0 || size > 8 || TYPE_MODE (type) == BLKmode;
 }
 
 /* ==========================================================================
@@ -1368,7 +1528,7 @@ fructus_option_override (void)
 #undef  TARGET_RETURN_IN_MEMORY
 #define TARGET_RETURN_IN_MEMORY fructus_return_in_memory
 #undef  TARGET_MUST_PASS_IN_STACK
-#define TARGET_MUST_PASS_IN_STACK fructus_must_pass_in_stack
+#define TARGET_MUST_PASS_IN_STACK must_pass_in_stack_var_size_or_pad
 #undef  TARGET_STRICT_ARGUMENT_NAMING
 #define TARGET_STRICT_ARGUMENT_NAMING hook_bool_CUMULATIVE_ARGS_true
 

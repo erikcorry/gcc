@@ -282,6 +282,12 @@ struct fructus_cumulative_args
 
 #define FUNCTION_ARG_REGNO_P(R) ((R) >= FRUCTUS_R3 && (R) <= FRUCTUS_R0)
 
+/* An aggregate comes back in registers when its fields fit in four of them,
+   which is TARGET_RETURN_IN_MEMORY's business.  GCC's default is to return
+   every aggregate through memory before asking, which is the older PCC
+   convention and not this ABI's.  */
+#define DEFAULT_PCC_STRUCT_RETURN 0
+
 /* --------------------------------------------------------------------------
    Addressing
    -------------------------------------------------------------------------- */
