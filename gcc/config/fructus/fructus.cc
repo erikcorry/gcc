@@ -335,7 +335,7 @@ fructus_reg_is (rtx x, int n)
   return REG_P (x) && REGNO (x) == (unsigned) FRUCTUS_REGNO (n);
 }
 
-static bool
+bool
 fructus_same_reg_p (rtx a, rtx b)
 {
   return REG_P (a) && REG_P (b) && REGNO (a) == REGNO (b);
@@ -428,10 +428,6 @@ fructus_alu_length (enum rtx_code code, rtx *operands)
     {
     case ASHIFT: case ASHIFTRT: case LSHIFTRT:
       return 2;
-    case AND:
-      if (v == 255)
-	return 2;		/* zxt8 */
-      break;
     case PLUS:
       if (tied && fructus_reg_is (d, 0) && (v == 1 || v == -1 || v == 2))
 	return 1;
@@ -504,10 +500,6 @@ fructus_output_alu (enum rtx_code code, rtx *operands)
 
   if (CONST_INT_P (operands[2]))
     {
-      /* zxt8 is two bytes in every register; `and' with 255 is two only when
-	 tied, through immask5.  */
-      if (code == AND && INTVAL (operands[2]) == 255)
-	return "zxt8\t%0, %1";
       snprintf (buf, sizeof buf, "%s\t%%0, %%1, #%%2", mn);
       return buf;
     }

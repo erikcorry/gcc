@@ -42,6 +42,7 @@ extern bool fructus_cbranch_imm_p (enum rtx_code, machine_mode,
 extern bool fructus_cbranch_ok_p (rtx, enum rtx_code, machine_mode);
 
 extern int fructus_move_length (rtx *);
+extern bool fructus_same_reg_p (rtx, rtx);
 extern int fructus_double_move_length (rtx *);
 extern int fructus_alu_length (enum rtx_code, rtx *);
 extern int fructus_rsb_length (rtx *);

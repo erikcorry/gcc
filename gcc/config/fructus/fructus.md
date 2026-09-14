@@ -184,11 +184,11 @@
 	(zero_extend:HI (match_operand:QI 1 "nonimmediate_operand" "r,m")))]
   ""
   "@
-   zxt8\t%0, %1
+   and\t%0, %1, #255
    ld8\t%0, %1"
   [(set (attr "length")
 	(if_then_else (eq_attr "alternative" "0")
-		      (const_int 2)
+		      (symbol_ref "(fructus_same_reg_p (operands[0], operands[1]) ? 2 : 3)")
 		      (symbol_ref "fructus_move_length (operands)")))])
 
 (define_insn "extendqihi2"
