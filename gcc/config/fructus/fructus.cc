@@ -826,6 +826,7 @@ fructus_arg_regno (int p, int n)
 }
 
 static bool fructus_return_in_memory (const_tree, const_tree);
+static int fructus_aggregate_regs (const_tree);
 
 /* Whether FNTYPE returns through the hidden pointer.  Not aggregate_value_p,
    which asks TARGET_FNTYPE_ABI whether the return register is clobbered - and
@@ -856,6 +857,8 @@ fructus_init_cumulative_args (CUMULATIVE_ARGS *cum, tree fntype,
 	cum->full = true;
       if (fructus_hidden_return_p (fntype))
 	cum->ret_regs = 1;	/* the hidden pointer comes back in r0 */
+      else if (AGGREGATE_TYPE_P (ret))
+	cum->ret_regs = fructus_aggregate_regs (ret);
       else
 	cum->ret_regs = fructus_value_regs (TYPE_MODE (ret));
     }
@@ -953,6 +956,21 @@ fructus_decompose (const_tree type, struct fructus_fields *f)
       || !TYPE_SIZE (type) || !tree_fits_uhwi_p (TYPE_SIZE (type)))
     return false;
   return fructus_collect_fields (type, 0, f) && f->n > 0;
+}
+
+/* Registers an aggregate return value occupies: its fields' registers, as
+   fructus_function_value places them.  NOT its mode's size - a six-byte
+   struct has no integer mode and would count as none, and four chars are an
+   SImode that counts as two, while their fields reach r2 and r3.  Counting
+   either way short gives a function the convention that preserves r2 or r3
+   while its return value is in them, and its epilogue then restores the
+   caller's register over a field.  */
+
+static int
+fructus_aggregate_regs (const_tree type)
+{
+  struct fructus_fields f;
+  return fructus_decompose (type, &f) ? f.regs : 0;
 }
 
 /* ARG's fields, when they all reach registers.  Returns how many there are,
