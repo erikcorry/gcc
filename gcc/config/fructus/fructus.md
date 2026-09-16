@@ -497,11 +497,15 @@
 ;; Jumps
 ;; -------------------------------------------------------------------------
 
-;; gas relaxes jmpr between two and three bytes on its own.
+;; There is no wide relative jump: `jmpr' reaches a byte's displacement and
+;; `jmp' reaches everywhere absolutely, in the same three bytes and a cycle
+;; less.  So this picks by distance itself rather than leaving it to gas.
 (define_insn "jump"
   [(set (pc) (label_ref (match_operand 0 "" "")))]
   ""
-  "jmpr\t%l0"
+{
+  return get_attr_length (insn) == 2 ? "jmpr\t%l0" : "jmp\t%l0";
+}
   [(set (attr "length")
 	(if_then_else (and (ge (minus (match_dup 0) (pc)) (const_int -120))
 			   (le (minus (match_dup 0) (pc)) (const_int 120)))
@@ -641,7 +645,7 @@
    (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
   "SIBLING_CALL_P (insn)"
-  "jmpr\t%0"
+  "jmp\t%0"
   [(set_attr "length" "3")])
 
 (define_expand "sibcall_value"
@@ -678,7 +682,7 @@
    (use (unspec:HI [(match_operand 3 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
   "SIBLING_CALL_P (insn)"
-  "jmpr\t%1"
+  "jmp\t%1"
   [(set_attr "length" "3")])
 
 ;; -------------------------------------------------------------------------
