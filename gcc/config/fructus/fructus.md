@@ -511,45 +511,29 @@
 			   (le (minus (match_dup 0) (pc)) (const_int 120)))
 		      (const_int 2) (const_int 3)))])
 
-;; A jump through a register is `jmp r5', so the address goes to r5 first.
-;; It used to go through lr - `mov lr, ra' and `ret' - which cost the same
-;; three bytes but DESTROYED THE RETURN ADDRESS, so a function with a switch
-;; table had to save lr as though it made calls.  Now it does not.
+;; A jump through a register is `jmp ra' in two bytes, so the allocator picks
+;; the register and nothing has to be moved first.  It used to be `jmp r5' in
+;; one byte, and the byte it saved was charged back in allocation: every
+;; indirect jump had to get its address into the one register the assembler
+;; may also clobber.  Both spellings cost three cycles - what the instruction
+;; pays for is reading a register, not fetching a byte.
 ;;
-;; r5 rather than a register the allocator picks, because there is no class
-;; that names one register, and because r5 is the one that is expendable
-;; everywhere: caller saved in all three ABIs, never an argument or a return
-;; value, and untouched by any epilogue - which is what lets a tail call
-;; through a pointer put its target here and still unwind afterwards.
-(define_expand "indirect_jump"
-  [(set (pc) (match_operand:HI 0 "register_operand"))]
-  ""
-{
-  emit_move_insn (gen_rtx_REG (HImode, R5_REGNUM), operands[0]);
-  operands[0] = gen_rtx_REG (HImode, R5_REGNUM);
-})
+;; Before either existed the sequence was `mov lr, ra' and `ret', which cost
+;; the same three bytes but DESTROYED THE RETURN ADDRESS, so a function with a
+;; switch table had to save lr as though it made calls.
 
-(define_insn "*indirect_jump"
-  [(set (pc) (reg:HI R5_REGNUM))]
+(define_insn "indirect_jump"
+  [(set (pc) (match_operand:HI 0 "register_operand" "r"))]
   ""
-  "jmp\tr5"
-  [(set_attr "length" "1")])
+  "jmp\t%0"
+  [(set_attr "length" "2")])
 
-(define_expand "tablejump"
-  [(parallel [(set (pc) (match_operand:HI 0 "register_operand"))
-	      (use (label_ref (match_operand 1 "")))])]
+(define_insn "tablejump"
+  [(set (pc) (match_operand:HI 0 "register_operand" "r"))
+   (use (label_ref (match_operand 1 "")))]
   ""
-{
-  emit_move_insn (gen_rtx_REG (HImode, R5_REGNUM), operands[0]);
-  operands[0] = gen_rtx_REG (HImode, R5_REGNUM);
-})
-
-(define_insn "*tablejump"
-  [(set (pc) (reg:HI R5_REGNUM))
-   (use (label_ref (match_operand 0 "")))]
-  ""
-  "jmp\tr5"
-  [(set_attr "length" "1")])
+  "jmp\t%0"
+  [(set_attr "length" "2")])
 
 ;; -------------------------------------------------------------------------
 ;; Calls.  Each carries its callee's ABI id, from the end-marker cookie,
@@ -622,22 +606,19 @@
 {
   rtx addr = XEXP (operands[0], 0);
   if (!fructus_sibcall_operand (addr, Pmode))
-    {
-      emit_move_insn (gen_rtx_REG (Pmode, R5_REGNUM), addr);
-      operands[0] = gen_rtx_MEM (QImode, gen_rtx_REG (Pmode, R5_REGNUM));
-    }
+    operands[0] = gen_rtx_MEM (QImode, force_reg (Pmode, addr));
   if (operands[2] == NULL_RTX)
     operands[2] = const0_rtx;
 })
 
 (define_insn "*sibcall_reg"
-  [(call (mem:QI (reg:HI R5_REGNUM))
-	 (match_operand 0 "" ""))
-   (use (unspec:HI [(match_operand 1 "const_int_operand" "")]
+  [(call (mem:QI (match_operand:HI 0 "register_operand" "r"))
+	 (match_operand 1 "" ""))
+   (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
   "SIBLING_CALL_P (insn)"
-  "jmp\tr5"
-  [(set_attr "length" "1")])
+  "jmp\t%0"
+  [(set_attr "length" "2")])
 
 (define_insn "*sibcall"
   [(call (mem:QI (match_operand:HI 0 "fructus_sibcall_operand" "i"))
@@ -657,23 +638,20 @@
 {
   rtx addr = XEXP (operands[1], 0);
   if (!fructus_sibcall_operand (addr, Pmode))
-    {
-      emit_move_insn (gen_rtx_REG (Pmode, R5_REGNUM), addr);
-      operands[1] = gen_rtx_MEM (QImode, gen_rtx_REG (Pmode, R5_REGNUM));
-    }
+    operands[1] = gen_rtx_MEM (QImode, force_reg (Pmode, addr));
   if (operands[3] == NULL_RTX)
     operands[3] = const0_rtx;
 })
 
 (define_insn "*sibcall_value_reg"
   [(set (match_operand 0 "" "")
-	(call (mem:QI (reg:HI R5_REGNUM))
-	      (match_operand 1 "" "")))
-   (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
+	(call (mem:QI (match_operand:HI 1 "register_operand" "r"))
+	      (match_operand 2 "" "")))
+   (use (unspec:HI [(match_operand 3 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
   "SIBLING_CALL_P (insn)"
-  "jmp\tr5"
-  [(set_attr "length" "1")])
+  "jmp\t%1"
+  [(set_attr "length" "2")])
 
 (define_insn "*sibcall_value"
   [(set (match_operand 0 "" "")
