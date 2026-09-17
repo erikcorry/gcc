@@ -349,6 +349,11 @@ fructus_mem_length (rtx reg, rtx mem, bool load)
   rtx addr = XEXP (mem, 0), base = addr;
   HOST_WIDE_INT off = 0;
 
+  /* Indexed: two registers, two bytes, and no displacement to weigh.  */
+  if (GET_CODE (addr) == PLUS
+      && REG_P (XEXP (addr, 0)) && REG_P (XEXP (addr, 1)))
+    return 2;
+
   if (GET_CODE (addr) == PLUS && CONST_INT_P (XEXP (addr, 1)))
     base = XEXP (addr, 0), off = INTVAL (XEXP (addr, 1));
 
@@ -1288,6 +1293,17 @@ fructus_legitimate_address_p (machine_mode mode, rtx x, bool strict,
       return fructus_imm10_p (off) && fructus_imm10_p (last);
     }
 
+  /* Register + register: `ld rd, [ra, rb]', two bytes, the two added unscaled.
+     THERE IS NO DISPLACEMENT FIELD IN THIS FORM, and a 32-bit access is split
+     into two 16-bit ones at +0 and +2 - so it is offered only for the modes
+     that fit in a single access.  Widening it would mean materialising the
+     sum into a register anyway, which is what the middle end does for us.  */
+  if (GET_CODE (x) == PLUS
+      && (mode == QImode || mode == HImode)
+      && fructus_base_reg_ok_p (XEXP (x, 0), strict)
+      && fructus_base_reg_ok_p (XEXP (x, 1), strict))
+    return true;
+
   return false;
 }
 
@@ -1300,6 +1316,15 @@ fructus_print_operand_address (FILE *file, machine_mode, rtx addr)
 {
   rtx base = addr;
   HOST_WIDE_INT off = 0;
+
+  /* The indexed form is two registers and no displacement at all.  */
+  if (GET_CODE (addr) == PLUS
+      && REG_P (XEXP (addr, 0)) && REG_P (XEXP (addr, 1)))
+    {
+      fprintf (file, "[%s, %s]", reg_names[REGNO (XEXP (addr, 0))],
+	       reg_names[REGNO (XEXP (addr, 1))]);
+      return;
+    }
 
   if (GET_CODE (addr) == PLUS && CONST_INT_P (XEXP (addr, 1)))
     base = XEXP (addr, 0), off = INTVAL (XEXP (addr, 1));

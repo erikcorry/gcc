@@ -190,7 +190,10 @@ enum reg_class
 #define REGNO_REG_CLASS(R) ((R) < FIRST_PSEUDO_REGISTER ? GENERAL_REGS : NO_REGS)
 
 #define BASE_REG_CLASS GENERAL_REGS
-#define INDEX_REG_CLASS NO_REGS
+/* Any register can index.  `ld rd, [ra, rb]' takes two arbitrary registers and
+   adds them unscaled; the form carries no displacement, which is why
+   fructus_legitimate_address_p offers it for 8- and 16-bit accesses only.  */
+#define INDEX_REG_CLASS GENERAL_REGS
 
 #define FRUCTUS_BASE_REGNO_P(N) ((unsigned) (N) < FIRST_PSEUDO_REGISTER)
 
@@ -202,7 +205,9 @@ enum reg_class
   ((N) >= FIRST_PSEUDO_REGISTER || FRUCTUS_BASE_REGNO_P (N))
 #endif
 
-#define REGNO_OK_FOR_INDEX_P(N) 0
+/* An index register is exactly a base register here - the two halves of an
+   indexed address are interchangeable, since the machine just adds them.  */
+#define REGNO_OK_FOR_INDEX_P(N) REGNO_OK_FOR_BASE_P (N)
 
 /* --------------------------------------------------------------------------
    The stack and the frame
