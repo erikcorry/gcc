@@ -106,11 +106,17 @@
 ;; pre-decrement and a pop a post-increment.
 ;; -------------------------------------------------------------------------
 
+;; There is no byte push: `push8` was deleted to free the opcodes the
+;; three-register stm and ldm needed.  The ABI still packs a byte argument
+;; unpadded, so the slot is made and then stored into.  Two instructions where
+;; there was one, on a shape that needs a call with more arguments than the
+;; registers carry AND a byte among the ones that spill.
 (define_insn "pushqi1"
   [(set (mem:QI (pre_dec:HI (reg:HI SP_REGNUM)))
 	(match_operand:QI 0 "fructus_push_operand" "r"))]
   ""
-  "push8\t%0")
+  "add\tsp, sp, #-1\n\tst8\t%0, [sp, #0]"
+  [(set_attr "length" "4")])
 
 (define_insn "pushhi1"
   [(set (mem:HI (pre_dec:HI (reg:HI SP_REGNUM)))
