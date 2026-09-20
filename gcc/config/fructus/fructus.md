@@ -49,7 +49,6 @@
 (define_mode_iterator QHI [QI HI])
 (define_mode_iterator SISF [SI SF])
 (define_mode_attr bw [(QI "8") (HI "")])
-(define_mode_attr mw [(QI "q") (HI "h")])
 
 ;; -------------------------------------------------------------------------
 ;; Moves
@@ -373,32 +372,32 @@
 ;; a constraint that knows the code - see constraints.md.
 ;; -------------------------------------------------------------------------
 
-(define_expand "cbranch<mode>4"
+(define_expand "cbranchhi4"
   [(set (pc)
 	(if_then_else (match_operator 0 "ordered_comparison_operator"
-			[(match_operand:QHI 1 "register_operand")
-			 (match_operand:QHI 2 "nonmemory_operand")])
+			[(match_operand:HI 1 "register_operand")
+			 (match_operand:HI 2 "nonmemory_operand")])
 		      (label_ref (match_operand 3 ""))
 		      (pc)))]
   ""
 {
-  fructus_expand_cbranch (operands, <MODE>mode);
+  fructus_expand_cbranch (operands, HImode);
 })
 
 (define_code_iterator any_cond [eq ne lt le gt ge ltu leu gtu geu])
 (define_code_attr cc [(eq "eq") (ne "ne") (lt "lt") (le "le") (gt "gt")
 		      (ge "ge") (ltu "lo") (leu "ls") (gtu "hi") (geu "hs")])
 
-(define_insn "*cbranch<mode>_<code>"
+(define_insn "*cbranchhi_<code>"
   [(set (pc)
-	(if_then_else (any_cond (match_operand:QHI 0 "register_operand" "r,r")
-				(match_operand:QHI 1 "fructus_cmp_operand"
-						   "r,C<cc><mw>"))
+	(if_then_else (any_cond (match_operand:HI 0 "register_operand" "r,r")
+				(match_operand:HI 1 "fructus_cmp_operand"
+						   "r,C<cc>h"))
 		      (label_ref (match_operand 2 ""))
 		      (pc)))]
-  "fructus_cbranch_ok_p (operands[1], <CODE>, <MODE>mode)"
+  "fructus_cbranch_ok_p (operands[1], <CODE>, HImode)"
 {
-  return fructus_output_cbranch (operands, <CODE>, <MODE>mode, false,
+  return fructus_output_cbranch (operands, <CODE>, HImode, false,
 				 get_attr_length (insn));
 }
   [(set (attr "length")
@@ -406,29 +405,29 @@
 	  (and (ge (minus (match_dup 2) (pc)) (const_int -120))
 	       (le (minus (match_dup 2) (pc)) (const_int 120)))
 	  (if_then_else
-	    (match_test "fructus_cbranch_ok_p (operands[1], <CODE>, <MODE>mode)")
+	    (match_test "fructus_cbranch_ok_p (operands[1], <CODE>, HImode)")
 	    (const_int 3)
 	    (if_then_else
 	      (match_test "fructus_cbranch_ok_p (operands[1],
-				 reverse_condition (<CODE>), <MODE>mode)")
+				 reverse_condition (<CODE>), HImode)")
 	      (const_int 6) (const_int 8)))
 	  (if_then_else
 	    (match_test "fructus_cbranch_ok_p (operands[1],
-			       reverse_condition (<CODE>), <MODE>mode)")
+			       reverse_condition (<CODE>), HImode)")
 	    (const_int 6) (const_int 8))))])
 
 ;; The same with the arms exchanged, which is what inverting a jump produces
 ;; when the reversed comparison has no encoding of its own.
-(define_insn "*cbranch<mode>_<code>_rev"
+(define_insn "*cbranchhi_<code>_rev"
   [(set (pc)
-	(if_then_else (any_cond (match_operand:QHI 0 "register_operand" "r,r")
-				(match_operand:QHI 1 "fructus_cmp_operand"
-						   "r,C<cc><mw>"))
+	(if_then_else (any_cond (match_operand:HI 0 "register_operand" "r,r")
+				(match_operand:HI 1 "fructus_cmp_operand"
+						   "r,C<cc>h"))
 		      (pc)
 		      (label_ref (match_operand 2 ""))))]
-  "fructus_cbranch_ok_p (operands[1], <CODE>, <MODE>mode)"
+  "fructus_cbranch_ok_p (operands[1], <CODE>, HImode)"
 {
-  return fructus_output_cbranch (operands, <CODE>, <MODE>mode, true,
+  return fructus_output_cbranch (operands, <CODE>, HImode, true,
 				 get_attr_length (insn));
 }
   [(set (attr "length")
@@ -437,7 +436,7 @@
 	       (le (minus (match_dup 2) (pc)) (const_int 120)))
 	  (if_then_else
 	    (match_test "fructus_cbranch_ok_p (operands[1],
-			       reverse_condition (<CODE>), <MODE>mode)")
+			       reverse_condition (<CODE>), HImode)")
 	    (const_int 3)
 	    (const_int 6))
 	  (const_int 6)))])

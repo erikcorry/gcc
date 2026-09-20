@@ -45,7 +45,7 @@
 ;; The compare-and-branch constants.  condimm5 pairs a condition with its
 ;; constant, so whether `br ra, #k' can test k depends on the comparison as
 ;; well as on k.  A constraint cannot see the operator, so there is one per
-;; comparison code and width - "C" + cond3 name + h (16-bit br) or q (br8).
+;; comparison code - "C" + the cond3 name + h, the 16-bit width.
 ;; An insn condition alone would not do: LRA can substitute a constant for a
 ;; pseudo it knows is equivalent, checking only the constraint.
 
@@ -80,33 +80,3 @@
   (and (match_code "const_int")
        (match_test "fructus_cbranch_imm_p (GEU, HImode, ival)")))
 
-(define_constraint "Ceqq" "br8 eq constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (EQ, QImode, ival)")))
-(define_constraint "Cneq" "br8 ne constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (NE, QImode, ival)")))
-(define_constraint "Cltq" "br8 lt constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (LT, QImode, ival)")))
-(define_constraint "Cleq" "br8 le constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (LE, QImode, ival)")))
-(define_constraint "Cgtq" "br8 gt constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (GT, QImode, ival)")))
-(define_constraint "Cgeq" "br8 ge constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (GE, QImode, ival)")))
-(define_constraint "Cloq" "br8 lo constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (LTU, QImode, ival)")))
-(define_constraint "Clsq" "br8 ls constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (LEU, QImode, ival)")))
-(define_constraint "Chiq" "br8 hi constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (GTU, QImode, ival)")))
-(define_constraint "Chsq" "br8 hs constant."
-  (and (match_code "const_int")
-       (match_test "fructus_cbranch_imm_p (GEU, QImode, ival)")))

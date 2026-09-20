@@ -200,7 +200,7 @@ fructus_cond3_code (const char *name)
 static int
 fructus_condimm_index (enum rtx_code code, machine_mode mode, HOST_WIDE_INT k)
 {
-  int width = mode == QImode ? 8 : 16;
+  int width = 16;
   HOST_WIDE_INT s0, l0, s1, l1;
 
   if (!fructus_truth_set (code, width, k, &s0, &l0))
@@ -286,7 +286,7 @@ fructus_output_cbranch (rtx *operands, enum rtx_code code, machine_mode mode,
 {
   static char buf[160];
   char c[40], nc[40];
-  const char *mn = mode == QImode ? "br8" : "br";
+  const char *mn = "br";
   enum rtx_code cc = invert ? reverse_condition (code) : code;
   bool c_ok = fructus_cond_text (c, sizeof c, cc, mode, operands[1]);
   bool nc_ok = fructus_cond_text (nc, sizeof nc, reverse_condition (cc), mode,
