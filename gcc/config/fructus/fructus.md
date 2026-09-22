@@ -593,11 +593,19 @@
 ;; two bytes and a return are saved over `call' followed by `ret'.
 ;;
 ;; A SYMBOL GOES IN THE JUMP, ANYTHING ELSE GOES THROUGH r5.  An indirect tail
-;; call was impossible until the machine had `jmp r5': through lr it would
+;; call was impossible until the machine had `jmp ra': through lr it would
 ;; have destroyed the very return address it exists to pass along.  r5 is safe
 ;; to stage it in because no epilogue touches r5 - it is caller saved in all
 ;; three ABIs - so the move below survives the unwinding that the sibcall
 ;; epilogue does between here and the jump.
+;;
+;; IT HAS TO BE r5 AND NOT WHATEVER THE ALLOCATOR PICKS, unlike indirect_jump.
+;; The epilogue is emitted between the move and the jump, and it pops every
+;; callee-saved register the function used - so a target the allocator put in
+;; r2, r3 or r4 is overwritten with the caller's value before the jump reads
+;; it.  pr34456 at -Os did exactly that: `pop r2, r3, lr' then `jmp r2'.
+;; Nothing in the jump's operand tells the allocator about the epilogue, since
+;; the epilogue does not exist yet when registers are allocated.
 ;;
 ;; Whether a tail call is allowed AT ALL is a question about the sliding
 ;; convention, not about the frame: see fructus_function_ok_for_sibcall.
@@ -611,18 +619,21 @@
 {
   rtx addr = XEXP (operands[0], 0);
   if (!fructus_sibcall_operand (addr, Pmode))
-    operands[0] = gen_rtx_MEM (QImode, force_reg (Pmode, addr));
+    {
+      emit_move_insn (gen_rtx_REG (Pmode, R5_REGNUM), addr);
+      operands[0] = gen_rtx_MEM (QImode, gen_rtx_REG (Pmode, R5_REGNUM));
+    }
   if (operands[2] == NULL_RTX)
     operands[2] = const0_rtx;
 })
 
 (define_insn "*sibcall_reg"
-  [(call (mem:QI (match_operand:HI 0 "register_operand" "r"))
-	 (match_operand 1 "" ""))
-   (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
+  [(call (mem:QI (reg:HI R5_REGNUM))
+	 (match_operand 0 "" ""))
+   (use (unspec:HI [(match_operand 1 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
   "SIBLING_CALL_P (insn)"
-  "jmp\t%0"
+  "jmp\tr5"
   [(set_attr "length" "2")])
 
 (define_insn "*sibcall"
@@ -643,19 +654,22 @@
 {
   rtx addr = XEXP (operands[1], 0);
   if (!fructus_sibcall_operand (addr, Pmode))
-    operands[1] = gen_rtx_MEM (QImode, force_reg (Pmode, addr));
+    {
+      emit_move_insn (gen_rtx_REG (Pmode, R5_REGNUM), addr);
+      operands[1] = gen_rtx_MEM (QImode, gen_rtx_REG (Pmode, R5_REGNUM));
+    }
   if (operands[3] == NULL_RTX)
     operands[3] = const0_rtx;
 })
 
 (define_insn "*sibcall_value_reg"
   [(set (match_operand 0 "" "")
-	(call (mem:QI (match_operand:HI 1 "register_operand" "r"))
-	      (match_operand 2 "" "")))
-   (use (unspec:HI [(match_operand 3 "const_int_operand" "")]
+	(call (mem:QI (reg:HI R5_REGNUM))
+	      (match_operand 1 "" "")))
+   (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
   "SIBLING_CALL_P (insn)"
-  "jmp\t%1"
+  "jmp\tr5"
   [(set_attr "length" "2")])
 
 (define_insn "*sibcall_value"

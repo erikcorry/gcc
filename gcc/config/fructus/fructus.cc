@@ -723,15 +723,28 @@ fructus_emit_pop (const int *regs, int n)
 }
 
 /* sp += N.  Up to +-512 is one add; beyond that the constant goes through
-   r5, which no argument or return value ever occupies.  */
+   r5, which no argument or return value ever occupies.
+
+   UNLESS KEEP_R5, which the epilogue of an indirect tail call sets: its
+   target is already waiting in r5 for the `jmp r5' after the epilogue.  Then
+   a large N is a run of adds that each fit.  Only a frame over 511 bytes
+   pays for it, and only in that one epilogue.  */
 
 static void
-fructus_emit_sp_add (HOST_WIDE_INT n)
+fructus_emit_sp_add (HOST_WIDE_INT n, bool keep_r5 = false)
 {
   if (n == 0)
     return;
   rtx v = gen_int_mode (n, HImode);
-  if (!fructus_alu_imm_p (PLUS, INTVAL (v), true))
+  if (!fructus_alu_imm_p (PLUS, INTVAL (v), true) && keep_r5)
+    {
+      gcc_assert (n > 0);
+      for (; n > 511; n -= 511)
+	emit_insn (gen_addhi3 (stack_pointer_rtx, stack_pointer_rtx,
+			       GEN_INT (511)));
+      v = GEN_INT (n);
+    }
+  else if (!fructus_alu_imm_p (PLUS, INTVAL (v), true))
     {
       if (cfun->static_chain_decl)
 	sorry ("a nested function with a frame over 512 bytes");
@@ -767,7 +780,7 @@ fructus_expand_epilogue (bool sibcall)
   emit_insn (gen_blockage ());
   if (frame_pointer_needed)
     emit_move_insn (stack_pointer_rtx, hard_frame_pointer_rtx);
-  fructus_emit_sp_add (m->frame_size);
+  fructus_emit_sp_add (m->frame_size, sibcall);
 
   /* The pushes in reverse, each one's register list reversed too: a push
      names its first register highest and a pop takes them lowest first.  */
@@ -1204,6 +1217,11 @@ fructus_function_ok_for_sibcall (tree decl, tree exp)
 	fntype = TREE_TYPE (type);
     }
   if (fntype == NULL_TREE || !FUNC_OR_METHOD_TYPE_P (fntype))
+    return false;
+
+  /* An indirect tail call stages its target in r5, which is also the static
+     chain register, and one register cannot carry both.  */
+  if (decl == NULL_TREE && exp != NULL_TREE && CALL_EXPR_STATIC_CHAIN (exp))
     return false;
 
   return hard_reg_set_subset_p (fructus_fntype_abi (fntype).full_reg_clobbers (),
