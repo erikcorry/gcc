@@ -300,7 +300,14 @@ struct fructus_cumulative_args
 
 #define STORE_FLAG_VALUE 1
 
-#define SHIFT_COUNT_TRUNCATED 0
+/* Every shift reads only the bits its mode's width needs: the machine's
+   16-bit shifts the low four bits of the count, and the 32- and 64-bit
+   helpers in lib1funcs.S the low five and six.  So an `and' that masks a
+   count to the width can be dropped.  There are no bit-field instructions
+   with a variable position for this to mislead - the bit tests take a
+   constant - and no QImode shift, which would need three bits and not
+   four.  */
+#define SHIFT_COUNT_TRUNCATED 1
 
 /* --------------------------------------------------------------------------
    Costs
