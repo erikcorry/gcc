@@ -802,7 +802,7 @@ fructus_frame_pointer_required (void)
    Arguments and return values
 
    r0, r1, r2, r3 in order, then the stack.  A value takes (size + 1) / 2
-   registers, high half first; no pair alignment, no splitting, no
+   registers, low half first; no pair alignment, no splitting, no
    backfilling, unnamed arguments on the stack.
 
    Aggregates go through memory for now - passed on the stack, returned
@@ -820,14 +820,14 @@ fructus_value_regs (machine_mode mode)
   return (GET_MODE_SIZE (mode) + 1) / 2;
 }
 
-/* The GCC regno of the LOW word of a value of N registers starting at machine
-   register rP.  The high word is in rP, the low one in rP+N-1, and GCC's
-   numbering runs backwards so that the pair is consecutive the right way.  */
+/* The GCC regno of a value of N registers starting at machine register rP.
+   The low word is in rP and the high one in rP+N-1, which is the order GCC
+   wants a multi-register value in, so N does not matter.  */
 
 static unsigned
-fructus_arg_regno (int p, int n)
+fructus_arg_regno (int p, int n ATTRIBUTE_UNUSED)
 {
-  return FRUCTUS_REGNO (p + n - 1);
+  return FRUCTUS_REGNO (p);
 }
 
 static bool fructus_return_in_memory (const_tree, const_tree);
@@ -1210,7 +1210,7 @@ fructus_function_ok_for_sibcall (tree decl, tree exp)
 				crtl->abi->full_reg_clobbers ());
 }
 
-/* The return value: r0, r0:r1 or r0:r1:r2:r3, high to low - and for an
+/* The return value: r0, r0:r1 or r0:r1:r2:r3, low to high - and for an
    aggregate, its fields from r0 upward, exactly as they would be passed.  */
 
 static rtx
@@ -1237,7 +1237,7 @@ fructus_libcall_value (machine_mode mode, const_rtx)
 static bool
 fructus_function_value_regno_p (const unsigned int regno)
 {
-  return regno >= FRUCTUS_R3 && regno <= FRUCTUS_R0;
+  return regno <= FRUCTUS_R3;
 }
 
 /* An aggregate comes back in registers when its fields fit in four, and
@@ -1394,7 +1394,7 @@ fructus_hard_regno_nregs (unsigned int regno, machine_mode mode)
   return (GET_MODE_SIZE (mode) + 1) / 2;
 }
 
-/* A multi-register value may not include sp or lr, and must end at r0.  */
+/* A multi-register value may not include sp or lr, so must end by r5.  */
 
 static bool
 fructus_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
@@ -1405,7 +1405,7 @@ fructus_hard_regno_mode_ok (unsigned int regno, machine_mode mode)
     return mode == Pmode;
   if (n <= 1)
     return true;
-  return regno >= FRUCTUS_R5 && regno + n - 1 <= FRUCTUS_R0;
+  return regno + n - 1 <= FRUCTUS_R5;
 }
 
 static bool
@@ -1544,11 +1544,9 @@ fructus_expand_divmod_libfunc (rtx libfunc, machine_mode mode, rtx op0,
   rtx pair = emit_library_call_value (libfunc, NULL_RTX, LCT_CONST, SImode,
 				      op0, mode, op1, mode);
 
-  /* THE QUOTIENT IS THE HIGH WORD, which is where this differs from every
-     other port doing this: r0 holds the high half of a register pair, and the
-     quotient is in r0.  */
-  *quot = simplify_gen_subreg (mode, pair, SImode, GET_MODE_SIZE (mode));
-  *rem = simplify_gen_subreg (mode, pair, SImode, 0);
+  /* The quotient is in r0, the low word, and the remainder in r1.  */
+  *quot = simplify_gen_subreg (mode, pair, SImode, 0);
+  *rem = simplify_gen_subreg (mode, pair, SImode, GET_MODE_SIZE (mode));
 
   gcc_assert (*quot && *rem);
 }

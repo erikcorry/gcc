@@ -49,7 +49,7 @@
 
    THE REMAINDER COMES BACK THROUGH A POINTER, and that is measured rather
    than assumed.  The tidier interface is one 64-bit value with the quotient
-   on top - which is what isa/abi.s returns in r0:r1 and r2:r3, and what
+   in the low half - which is what isa/abi.s returns in r0:r1 and r2:r3, and what
    TARGET_EXPAND_DIVMOD_LIBFUNC would want - and it was tried twice:
 
      64-bit pair, composed with __ashldi3     1579 cycles a call
@@ -66,7 +66,7 @@ typedef unsigned int uint32_type __attribute__ ((mode (SI)));
 typedef unsigned int uint16_type __attribute__ ((mode (HI)));
 
 /* lib1funcs.S: the quotient in r0 and the remainder in r1, which is one
-   32-bit value with the quotient on top.  */
+   32-bit value with the quotient in the low half.  */
 extern uint32_type __udivmodhi4 (uint16_type, uint16_type);
 
 uint32_type __udivmodsi4 (uint32_type, uint32_type, uint32_type *);
@@ -92,8 +92,8 @@ __udivmodsi4 (uint32_type num, uint32_type den, uint32_type *rem)
   if (num <= 0xffffU)
     {
       uint32_type qr = __udivmodhi4 ((uint16_type) num, (uint16_type) den);
-      *rem = qr & 0xffffU;
-      return qr >> 16;
+      *rem = qr >> 16;
+      return qr & 0xffffU;
     }
 
   /* A divisor that fits a word: schoolbook, base 65536.  The high word
@@ -109,7 +109,7 @@ __udivmodsi4 (uint32_type num, uint32_type den, uint32_type *rem)
     {
       uint16_type d = (uint16_type) den;
       uint32_type qr = __udivmodhi4 ((uint16_type) (num >> 16), d);
-      uint16_type qhi = qr >> 16, r = qr & 0xffffU, lo = (uint16_type) num;
+      uint16_type qhi = qr & 0xffffU, r = qr >> 16, lo = (uint16_type) num;
       int i = 16;
 
       do

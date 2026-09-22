@@ -35,11 +35,11 @@
 (include "predicates.md")
 
 (define_constants
-  [(LR_REGNUM  0)
-   (SP_REGNUM  1)
-   (R5_REGNUM  2)
-   (R4_REGNUM  3)
-   (R0_REGNUM  7)])
+  [(R0_REGNUM  0)
+   (R4_REGNUM  4)
+   (R5_REGNUM  5)
+   (SP_REGNUM  6)
+   (LR_REGNUM  7)])
 
 (define_c_enum "unspec" [UNSPEC_CALLEE_CC])
 (define_c_enum "unspecv" [UNSPECV_BLOCKAGE])

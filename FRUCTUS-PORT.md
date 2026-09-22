@@ -36,11 +36,11 @@ that compiled callees keep exactly the registers `isa/abi.s` says they keep.
 
 ## How it is built
 
-- **The ABI's high:low pairs.** GCC's hard register numbers run backwards
-  through the machine's: GCC regno N is machine register r(7−N). GCC puts the
-  low word of a multi-register value at the lower regno, so reversed, every
-  pair — `r0:r1`, and the unaligned `r1:r2` the ABI allows — comes out
-  high:low, while memory stays little endian (`WORDS_BIG_ENDIAN` is 0).
+- **The ABI's low:high pairs.** GCC regno N is machine register rN. GCC puts
+  the low word of a multi-register value at the lower regno, which is exactly
+  the ABI's order, so every pair — `r0:r1`, and the unaligned `r1:r2` the ABI
+  allows — comes out low:high, matching little-endian memory
+  (`WORDS_BIG_ENDIAN` is 0).
 - **The sliding convention** uses GCC's per-function ABIs: three ABI ids,
   chosen by how many of r0–r3 the signature uses for arguments or the return
   value. `TARGET_FNTYPE_ABI` gives a function its own; each call pattern

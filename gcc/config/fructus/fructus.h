@@ -110,21 +110,12 @@
 /* --------------------------------------------------------------------------
    Registers
 
-   GCC'S REGISTER NUMBERS RUN BACKWARDS THROUGH THE MACHINE'S.  GCC regno N is
-   machine register r(7-N):
-
-     GCC   0    1    2    3    4    5    6    7    8     9
-           lr   sp   r5   r4   r3   r2   r1   r0   ?fp   ?ap
-
-   The reason is the ABI's register pairs.  A 32-bit value lives in two
-   registers HIGH HALF FIRST - r0:r1 is r0 high, r1 low - while memory is little
-   endian.  GCC puts a multi-register value in consecutive regnos with the LOW
-   word at the lower number (WORDS_BIG_ENDIAN governs memory too, and memory
-   must stay little endian), so with the natural numbering a long in r0:r1
-   would have its low half in r0.  Reversed, the pair at GCC regno 6 is r1
-   (low) then r0 (high), which is exactly isa/abi.s - and every pair,
-   including the unaligned ones the ABI allows (r1:r2), comes out the same
-   way.  Nothing else in GCC cares which way the numbers run.
+   GCC regno N is machine register rN, and ?fp and ?ap follow at 8 and 9.
+   A 32-bit value lives in two consecutive registers LOW HALF FIRST - r0:r1
+   is r0 low, r1 high - the same order as little-endian memory, which is also
+   the order GCC puts a multi-register value in with WORDS_BIG_ENDIAN clear.
+   Every pair, including the unaligned ones the ABI allows (r1:r2), comes out
+   that way with no help.
 
    r5 is an ordinary caller-saved register.  It is the assembler's scratch
    only in the customasm tooling; gas never expands an immediate, so the
@@ -135,33 +126,33 @@
    and a function that uses it saves it in the prologue exactly as a
    non-leaf function must anyway.  ?fp and ?ap are eliminated, always.  */
 
-#define FRUCTUS_LR   0
-#define FRUCTUS_SP   1
-#define FRUCTUS_R5   2
-#define FRUCTUS_R4   3
-#define FRUCTUS_R3   4
-#define FRUCTUS_R2   5
-#define FRUCTUS_R1   6
-#define FRUCTUS_R0   7
+#define FRUCTUS_R0   0
+#define FRUCTUS_R1   1
+#define FRUCTUS_R2   2
+#define FRUCTUS_R3   3
+#define FRUCTUS_R4   4
+#define FRUCTUS_R5   5
+#define FRUCTUS_SP   6
+#define FRUCTUS_LR   7
 #define FRUCTUS_SFP  8
 #define FRUCTUS_SAP  9
 
 /* Machine register rN, as a GCC regno, and back.  */
-#define FRUCTUS_REGNO(N) (7 - (N))
+#define FRUCTUS_REGNO(N) (N)
 
 #define FIRST_PSEUDO_REGISTER 10
 
 #define REGISTER_NAMES \
-  { "lr", "sp", "r5", "r4", "r3", "r2", "r1", "r0", "?fp", "?ap" }
+  { "r0", "r1", "r2", "r3", "r4", "r5", "sp", "lr", "?fp", "?ap" }
 
-#define ADDITIONAL_REGISTER_NAMES { { "r7", 0 }, { "r6", 1 } }
+#define ADDITIONAL_REGISTER_NAMES { { "r7", 7 }, { "r6", 6 } }
 
-#define FIXED_REGISTERS     { 0, 1, 0, 0, 0, 0, 0, 0, 1, 1 }
+#define FIXED_REGISTERS     { 0, 0, 0, 0, 0, 0, 1, 0, 1, 1 }
 
 /* The widest of the three conventions, which is ABI 0: r0-r3, r5 and lr are
    clobbered.  Functions whose signature leaves r2 or r3 unused preserve them
    instead; see fructus_fntype_abi.  */
-#define CALL_USED_REGISTERS { 1, 1, 1, 0, 1, 1, 1, 1, 1, 1 }
+#define CALL_USED_REGISTERS { 1, 1, 1, 1, 0, 1, 1, 1, 1, 1 }
 
 /* The argument and return registers first, since a value computed into the
    register it leaves in costs no move.  r4 is always callee saved and lr can
@@ -254,8 +245,8 @@ enum reg_class
 #define INCOMING_RETURN_ADDR_RTX gen_rtx_REG (Pmode, FRUCTUS_LR)
 #define DWARF_FRAME_RETURN_COLUMN DWARF_FRAME_REGNUM (FRUCTUS_LR)
 
-/* The debugger sees the machine's numbering, not GCC's.  */
-#define DEBUGGER_REGNO(N) ((N) < 8 ? 7 - (N) : INVALID_REGNUM)
+/* The debugger sees the machine's numbering, which is GCC's.  */
+#define DEBUGGER_REGNO(N) ((N) < 8 ? (N) : INVALID_REGNUM)
 
 /* --------------------------------------------------------------------------
    Passing arguments
@@ -285,7 +276,7 @@ struct fructus_cumulative_args
 #define INIT_CUMULATIVE_LIBCALL_ARGS(CUM, MODE, LIBNAME) \
   fructus_init_cumulative_args (&(CUM), NULL_TREE, (MODE))
 
-#define FUNCTION_ARG_REGNO_P(R) ((R) >= FRUCTUS_R3 && (R) <= FRUCTUS_R0)
+#define FUNCTION_ARG_REGNO_P(R) ((R) <= FRUCTUS_R3)
 
 /* An aggregate comes back in registers when its fields fit in four of them,
    which is TARGET_RETURN_IN_MEMORY's business.  GCC's default is to return
