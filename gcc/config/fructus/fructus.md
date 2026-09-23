@@ -441,7 +441,7 @@
 	    (const_int 6))
 	  (const_int 6)))])
 
-;; brset and brclear: a masked test against zero.
+;; brset and brclr: a masked test against zero.
 (define_code_iterator eqne [eq ne])
 
 (define_insn "*brmask_<code>"

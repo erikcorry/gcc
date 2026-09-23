@@ -306,14 +306,14 @@ fructus_output_cbranch (rtx *operands, enum rtx_code code, machine_mode mode,
   return buf;
 }
 
-/* brset / brclear: taken when %0 & %1 is non-zero if SET, zero otherwise.  */
+/* brset / brclr: taken when %0 & %1 is non-zero if SET, zero otherwise.  */
 
 const char *
 fructus_output_bitbranch (rtx *operands, bool set, int length)
 {
   if (length == 3)
-    return set ? "brset\t%0, #%1, %l2" : "brclear\t%0, #%1, %l2";
-  return (set ? "brclear\t%0, #%1, .Lb%=\n\tjmp\t%l2\n.Lb%=:"
+    return set ? "brset\t%0, #%1, %l2" : "brclr\t%0, #%1, %l2";
+  return (set ? "brclr\t%0, #%1, .Lb%=\n\tjmp\t%l2\n.Lb%=:"
 	  : "brset\t%0, #%1, .Lb%=\n\tjmp\t%l2\n.Lb%=:");
 }
 
