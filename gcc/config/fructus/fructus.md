@@ -41,7 +41,7 @@
    (SP_REGNUM  6)
    (LR_REGNUM  7)])
 
-(define_c_enum "unspec" [UNSPEC_CALLEE_CC])
+(define_c_enum "unspec" [UNSPEC_CALLEE_CC UNSPEC_CLMUL])
 (define_c_enum "unspecv" [UNSPECV_BLOCKAGE])
 
 (define_attr "length" "" (const_int 2))
@@ -302,6 +302,110 @@
 	(popcount:HI (match_operand:HI 1 "register_operand" "r")))]
   ""
   "popcount\t%0, %1")
+;; clmul multiplies the two bytes of one register without carries.  There
+;; is no RTL code for a carry-less product, so it is an unspec, reached
+;; through __builtin_fructus_clmul; the operands are packed by movhi below.
+(define_insn "fructus_clmul"
+  [(set (match_operand:HI 0 "register_operand" "=r")
+	(unspec:HI [(match_operand:HI 1 "register_operand" "r")] UNSPEC_CLMUL))]
+  ""
+  "clmul\t%0, %1")
+
+;; -------------------------------------------------------------------------
+;; movhi: ra with its high byte replaced, (x << 8) | (ra & 0xff), where x is
+;; rb or an immediate.  No named pattern asks for it; combine finds it.
+;;
+;; THE TWO BYTES DO NOT OVERLAP, so an ior, a plus and an xor of them are the
+;; same value, and the source may have written any of the three.  The low
+;; byte reaches combine as a zero_extend of a QImode value, or as an and
+;; with 255 when the value was HImode all along; the high byte is an ashift
+;; by 8, or for the immediate a constant whose low byte is zero.
+;; -------------------------------------------------------------------------
+
+(define_code_iterator bytes [ior plus xor])
+
+(define_insn "*movhi_<code>_zext"
+  [(set (match_operand:HI 0 "register_operand" "=r")
+	(bytes:HI (ashift:HI (match_operand:HI 2 "register_operand" "r")
+			     (const_int 8))
+		  (zero_extend:HI (match_operand:QI 1 "register_operand" "r"))))]
+  ""
+  "movhi\t%0, %1, %2")
+
+(define_insn "*movhi_<code>_and"
+  [(set (match_operand:HI 0 "register_operand" "=r")
+	(bytes:HI (ashift:HI (match_operand:HI 2 "register_operand" "r")
+			     (const_int 8))
+		  (and:HI (match_operand:HI 1 "register_operand" "r")
+			  (const_int 255))))]
+  ""
+  "movhi\t%0, %1, %2")
+
+(define_insn "*movhi_<code>_imm_zext"
+  [(set (match_operand:HI 0 "register_operand" "=r")
+	(bytes:HI (zero_extend:HI (match_operand:QI 1 "register_operand" "r"))
+		  (match_operand:HI 2 "fructus_high_byte_operand" "i")))]
+  ""
+{
+  return fructus_output_movhi_imm (operands);
+}
+  [(set_attr "length" "3")])
+
+(define_insn "*movhi_<code>_imm_and"
+  [(set (match_operand:HI 0 "register_operand" "=r")
+	(bytes:HI (and:HI (match_operand:HI 1 "register_operand" "r")
+			  (const_int 255))
+		  (match_operand:HI 2 "fructus_high_byte_operand" "i")))]
+  ""
+{
+  return fructus_output_movhi_imm (operands);
+}
+  [(set_attr "length" "3")])
+
+;; A rotate by 8 is a byte swap: the high byte shifted down, then movhi puts
+;; the source's low byte over it.  Two instructions and four bytes, where the
+;; shifts and an or are three and six.
+;;
+;; THE lsr WRITES BEFORE THE movhi READS THE SOURCE, so the shifted byte needs
+;; a register that is not the source.  A different destination is one, and
+;; costs nothing; when the destination IS the source, a scratch is.  Without
+;; the second alternative the tied case paid a `mov' to make them differ.
+(define_code_iterator rot8 [rotate rotatert])
+(define_code_attr rot_name [(rotate "rotl") (rotatert "rotr")])
+
+(define_insn "*<code>8"
+  [(set (match_operand:HI 0 "register_operand" "=&r,r")
+	(rot8:HI (match_operand:HI 1 "register_operand" "r,0")
+		 (const_int 8)))
+   (clobber (match_scratch:HI 2 "=X,&r"))]
+  ""
+  "@
+   lsr\t%0, %1, #8\n\tmovhi\t%0, %0, %1
+   lsr\t%2, %1, #8\n\tmovhi\t%0, %2, %1"
+  [(set_attr "length" "4")])
+
+(define_insn "bswaphi2"
+  [(set (match_operand:HI 0 "register_operand" "=&r,r")
+	(bswap:HI (match_operand:HI 1 "register_operand" "r,0")))
+   (clobber (match_scratch:HI 2 "=X,&r"))]
+  ""
+  "@
+   lsr\t%0, %1, #8\n\tmovhi\t%0, %0, %1
+   lsr\t%2, %1, #8\n\tmovhi\t%0, %2, %1"
+  [(set_attr "length" "4")])
+
+;; Only a rotate by 8 is one; any other count FAILs, and GCC builds it from
+;; shifts as it did before.
+(define_expand "<rot_name>hi3"
+  [(parallel [(set (match_operand:HI 0 "register_operand")
+		   (rot8:HI (match_operand:HI 1 "register_operand")
+			    (match_operand:HI 2 "const_int_operand")))
+	      (clobber (scratch:HI))])]
+  ""
+{
+  if (INTVAL (operands[2]) != 8)
+    FAIL;
+})
 
 ;; -------------------------------------------------------------------------
 ;; Predicates as values: iseq and isset.  Only == and != exist, so the

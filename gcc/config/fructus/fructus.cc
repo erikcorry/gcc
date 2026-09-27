@@ -40,6 +40,7 @@
 #include "calls.h"
 #include "expr.h"
 #include "builtins.h"
+#include "langhooks.h"
 #include "function-abi.h"
 #include "insn-config.h"
 #include "recog.h"
@@ -1445,9 +1446,57 @@ fructus_shift_truncation_mask (machine_mode mode)
    nearly the same thing.
    ========================================================================== */
 
+/* Whether X is one of the shapes movhi matches: the low byte of a register
+   combined with a register shifted left by 8, or with a constant whose low
+   byte is zero, by an ior, a plus or an xor - see fructus.md.  */
+
+static bool
+fructus_movhi_shape_p (rtx x)
+{
+  if (GET_MODE (x) != HImode
+      || (GET_CODE (x) != IOR && GET_CODE (x) != PLUS && GET_CODE (x) != XOR))
+    return false;
+
+  auto low_byte_p = [] (rtx op)
+    {
+      if (GET_CODE (op) == ZERO_EXTEND)
+	return GET_MODE (XEXP (op, 0)) == QImode && REG_P (SUBREG_P (XEXP (op, 0))
+						       ? SUBREG_REG (XEXP (op, 0))
+						       : XEXP (op, 0));
+      return (GET_CODE (op) == AND && REG_P (XEXP (op, 0))
+	      && CONST_INT_P (XEXP (op, 1)) && INTVAL (XEXP (op, 1)) == 255);
+    };
+
+  rtx a = XEXP (x, 0), b = XEXP (x, 1);
+  if (GET_CODE (a) == ASHIFT)
+    return (CONST_INT_P (XEXP (a, 1)) && INTVAL (XEXP (a, 1)) == 8
+	    && register_operand (XEXP (a, 0), HImode) && low_byte_p (b));
+  return (low_byte_p (a) && CONST_INT_P (b) && (INTVAL (b) & 0xff) == 0);
+}
+
+/* movhi rd, ra, #imm with the immediate a constant whose low byte is zero:
+   the instruction takes the byte, not the constant.  */
+
+const char *
+fructus_output_movhi_imm (rtx *operands)
+{
+  operands[2] = GEN_INT ((INTVAL (operands[2]) >> 8) & 0xff);
+  return "movhi\t%0, %1, #%2";
+}
+
 static bool
 fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total, bool)
 {
+  /* movhi is one instruction for what would otherwise be an and, a shift
+     or a constant load, and an or.  Priced as the one instruction it is,
+     combine takes it; left to the defaults it prices the same as the three
+     it replaces, and combine is then free not to.  */
+  if (fructus_movhi_shape_p (x))
+    {
+      *total = COSTS_N_INSNS (1);
+      return true;
+    }
+
   switch (GET_CODE (x))
     {
     case CONST_INT:
@@ -1655,6 +1704,91 @@ fructus_option_override (void)
 #define TARGET_INIT_LIBFUNCS fructus_init_libfuncs
 #undef  TARGET_EXPAND_DIVMOD_LIBFUNC
 #define TARGET_EXPAND_DIVMOD_LIBFUNC fructus_expand_divmod_libfunc
+
+/* ==========================================================================
+   Builtins
+
+   One, for clmul: it has no RTL code, so nothing reaches the instruction
+   except by name.  __builtin_fructus_clmul (x) is the carry-less product of
+   x's two bytes, exactly as the instruction defines it; the operands are
+   packed first, `(a & 0xff) | (b << 8)', which combine turns into movhi.
+
+   It is const: two calls with the same operand are one, and a call whose
+   result is unused goes.  With a constant operand it folds.
+   ========================================================================== */
+
+enum fructus_builtin
+{
+  FRUCTUS_BUILTIN_CLMUL,
+  FRUCTUS_BUILTIN_MAX
+};
+
+static GTY(()) tree fructus_builtin_decls[FRUCTUS_BUILTIN_MAX];
+
+static void
+fructus_init_builtins (void)
+{
+  tree u16 = unsigned_intHI_type_node;
+  tree fn = build_function_type_list (u16, u16, NULL_TREE);
+  tree decl = add_builtin_function ("__builtin_fructus_clmul", fn,
+				    FRUCTUS_BUILTIN_CLMUL, BUILT_IN_MD,
+				    NULL, NULL_TREE);
+  TREE_READONLY (decl) = 1;
+  TREE_NOTHROW (decl) = 1;
+  fructus_builtin_decls[FRUCTUS_BUILTIN_CLMUL] = decl;
+}
+
+static tree
+fructus_builtin_decl (unsigned code, bool)
+{
+  return code < FRUCTUS_BUILTIN_MAX ? fructus_builtin_decls[code]
+				     : error_mark_node;
+}
+
+/* The product of the two bytes, as tools/sim.js computes it.  */
+
+static unsigned
+fructus_clmul_value (unsigned x)
+{
+  unsigned r = 0;
+  for (int i = 0; i < 8; i++)
+    if ((x >> i) & 1)
+      r ^= ((x >> 8) & 0xff) << i;
+  return r;
+}
+
+static tree
+fructus_fold_builtin (tree fndecl, int, tree *args, bool)
+{
+  if (DECL_MD_FUNCTION_CODE (fndecl) == FRUCTUS_BUILTIN_CLMUL
+      && TREE_CODE (args[0]) == INTEGER_CST)
+    return build_int_cst (TREE_TYPE (TREE_TYPE (fndecl)),
+			  fructus_clmul_value (TREE_INT_CST_LOW (args[0])
+					       & 0xffff));
+  return NULL_TREE;
+}
+
+static rtx
+fructus_expand_builtin (tree exp, rtx target, rtx, machine_mode, int)
+{
+  tree fndecl = TREE_OPERAND (CALL_EXPR_FN (exp), 0);
+  gcc_assert (DECL_MD_FUNCTION_CODE (fndecl) == FRUCTUS_BUILTIN_CLMUL);
+
+  rtx op = force_reg (HImode, expand_normal (CALL_EXPR_ARG (exp, 0)));
+  if (!target || !register_operand (target, HImode))
+    target = gen_reg_rtx (HImode);
+  emit_insn (gen_fructus_clmul (target, op));
+  return target;
+}
+
+#undef  TARGET_INIT_BUILTINS
+#define TARGET_INIT_BUILTINS fructus_init_builtins
+#undef  TARGET_BUILTIN_DECL
+#define TARGET_BUILTIN_DECL fructus_builtin_decl
+#undef  TARGET_FOLD_BUILTIN
+#define TARGET_FOLD_BUILTIN fructus_fold_builtin
+#undef  TARGET_EXPAND_BUILTIN
+#define TARGET_EXPAND_BUILTIN fructus_expand_builtin
 
 struct gcc_target targetm = TARGET_INITIALIZER;
 

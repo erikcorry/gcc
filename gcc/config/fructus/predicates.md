@@ -67,3 +67,8 @@
 ;; with `jmp r5' instead; see the sibcall patterns.
 (define_predicate "fructus_sibcall_operand"
   (match_code "symbol_ref,label_ref,const"))
+
+;; A constant whose low byte is zero: the high byte of a movhi.
+(define_predicate "fructus_high_byte_operand"
+  (and (match_code "const_int")
+       (match_test "(INTVAL (op) & 0xff) == 0")))

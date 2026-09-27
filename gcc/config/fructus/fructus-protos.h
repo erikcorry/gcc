@@ -60,6 +60,7 @@ extern const char *fructus_output_cbranch (rtx *, enum rtx_code,
 					   machine_mode, bool, int);
 extern const char *fructus_output_bitbranch (rtx *, bool, int);
 extern const char *fructus_output_iseq (rtx *, bool);
+extern const char *fructus_output_movhi_imm (rtx *);
 #endif
 
 #endif /* GCC_FRUCTUS_PROTOS_H */
