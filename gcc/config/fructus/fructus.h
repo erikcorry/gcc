@@ -316,7 +316,7 @@ struct fructus_cumulative_args
 /* 1, FOR SPEED AS WELL AS SIZE, BY MEASUREMENT.  A branch costs a cycle
    falling through and four taken, where an ALU instruction costs one, which
    argues for 2 or 3 when optimizing for speed.  Measured at -O2 on the
-   fructus repository's tests/*.c and tests/bench, 2 and 3 both made div32.c 2.1%
+   fructus repository's C tests and tests/bench, 2 and 3 both made div32.c 2.1%
    slower and 28 bytes larger and moved nothing else: the straight-line code
    they buy - iseq and a mask, an or - is longer than the branch it
    replaces.  And under -Os it must be 1 whatever SPEED_P says, because

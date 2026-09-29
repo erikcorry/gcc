@@ -1450,7 +1450,7 @@ fructus_shift_truncation_mask (machine_mode mode)
 
    ONLY `mult' TELLS THE TWO APART, and that is measured rather than
    overlooked.  Pricing a MEM at its cycles for speed - ld 5, ld8 4 - left
-   every -O2 program in the fructus repository's tests/*.c and tests/bench
+   every -O2 program in the fructus repository's C tests and tests/bench
    byte for byte the same; so did a TARGET_MEMORY_MOVE_COST of 8 or 12
    against the default 4, to within six bytes and 21 cycles in 4.3 million,
    the wrong way.  And BRANCH_COST above 1 made tests/div32.c 2.1% slower
