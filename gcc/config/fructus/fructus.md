@@ -291,6 +291,25 @@
   DONE;
 })
 
+;; mul is the low half of the product, from the DSP, in four cycles; only
+;; with -mmul, since a part without a multiplier has no mul.  The tied form
+;; carries imm5 in two bytes, the untied one imm10 in three.
+(define_insn "mulhi3"
+  [(set (match_operand:HI 0 "register_operand" "=r,r,r")
+	(mult:HI (match_operand:HI 1 "register_operand" "%0,r,r")
+		 (match_operand:HI 2 "fructus_imm10_operand" "I,I,r")))]
+  "TARGET_MUL"
+  "@
+   mul\t%0, %1, #%2
+   mul\t%0, %1, #%2
+   mul\t%0, %1, %2"
+  [(set (attr "length")
+	(if_then_else (match_test "CONST_INT_P (operands[2])
+				   && !(which_alternative == 0
+					&& fructus_imm5_p (INTVAL (operands[2])))")
+		      (const_int 3)
+		      (const_int 2)))])
+
 (define_insn "clzhi2"
   [(set (match_operand:HI 0 "register_operand" "=r")
 	(clz:HI (match_operand:HI 1 "register_operand" "r")))]

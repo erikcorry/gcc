@@ -1442,8 +1442,21 @@ fructus_shift_truncation_mask (machine_mode mode)
 }
 
 /* ==========================================================================
-   Costs.  Rough, and in bytes more than in cycles, which on this bus are
-   nearly the same thing.
+   Costs.  For size, rough and in bytes: most instructions are two, and a
+   constant no form carries is a separate `mov'.  For speed, COSTS_N_INSNS
+   (1) is a cycle on the pipeline in rtl/cpu.sv - see the cost model under
+   [cpu] in isa/fructus.toml - where an ALU instruction is one cycle whatever
+   its length, a load of N bytes N + 3, and a taken branch four.
+
+   ONLY `mult' TELLS THE TWO APART, and that is measured rather than
+   overlooked.  Pricing a MEM at its cycles for speed - ld 5, ld8 4 - left
+   every -O2 program in the fructus repository's tests/*.c and tests/bench
+   byte for byte the same; so did a TARGET_MEMORY_MOVE_COST of 8 or 12
+   against the default 4, to within six bytes and 21 cycles in 4.3 million,
+   the wrong way.  And BRANCH_COST above 1 made tests/div32.c 2.1% slower
+   and 28 bytes larger - see fructus.h.  The costs gcc falls back on already
+   describe this machine well enough; what did not was the multiply, which
+   -mmul makes one instruction.
    ========================================================================== */
 
 /* Whether X is one of the shapes movhi matches: the low byte of a register
@@ -1485,7 +1498,8 @@ fructus_output_movhi_imm (rtx *operands)
 }
 
 static bool
-fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total, bool)
+fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total,
+		   bool speed)
 {
   /* movhi is one instruction for what would otherwise be an and, a shift
      or a constant load, and an or.  Priced as the one instruction it is,
@@ -1512,7 +1526,12 @@ fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total, bool)
       *total = COSTS_N_INSNS (2);
       return true;
     case MULT:
-      *total = COSTS_N_INSNS (GET_MODE_SIZE (mode) > 2 ? 40 : 15);
+      /* With -mmul a 16-bit product is one instruction, four cycles.
+	 Without it, or wider, it is a call into libgcc.  */
+      if (TARGET_MUL && mode == HImode)
+	*total = COSTS_N_INSNS (speed ? 4 : 1);
+      else
+	*total = COSTS_N_INSNS (GET_MODE_SIZE (mode) > 2 ? 40 : 15);
       return true;
     case DIV: case UDIV: case MOD: case UMOD:
       *total = COSTS_N_INSNS (GET_MODE_SIZE (mode) > 2 ? 80 : 40);
