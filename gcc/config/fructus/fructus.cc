@@ -1526,10 +1526,10 @@ fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total,
       *total = COSTS_N_INSNS (2);
       return true;
     case MULT:
-      /* With -mmul a 16-bit product is one instruction, four cycles.
+      /* With -mmul a 16-bit product is one instruction, two cycles.
 	 Without it, or wider, it is a call into libgcc.  */
       if (TARGET_MUL && mode == HImode)
-	*total = COSTS_N_INSNS (speed ? 4 : 1);
+	*total = COSTS_N_INSNS (speed ? 2 : 1);
       else
 	*total = COSTS_N_INSNS (GET_MODE_SIZE (mode) > 2 ? 40 : 15);
       return true;

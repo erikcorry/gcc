@@ -291,7 +291,7 @@
   DONE;
 })
 
-;; mul is the low half of the product, from the DSP, in four cycles; only
+;; mul is the low half of the product, from the DSP, in two cycles; only
 ;; with -mmul, since a part without a multiplier has no mul.  The tied form
 ;; carries imm5 in two bytes, the untied one imm10 in three.
 (define_insn "mulhi3"
