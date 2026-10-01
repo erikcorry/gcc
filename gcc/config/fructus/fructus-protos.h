@@ -33,6 +33,7 @@ extern void fructus_expand_epilogue (bool);
 #ifdef TREE_CODE
 extern void fructus_init_cumulative_args (CUMULATIVE_ARGS *, tree,
 					  machine_mode);
+extern unsigned int fructus_data_alignment (tree, unsigned int);
 #endif
 
 #ifdef RTX_CODE

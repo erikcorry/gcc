@@ -1446,17 +1446,25 @@ fructus_shift_truncation_mask (machine_mode mode)
    constant no form carries is a separate `mov'.  For speed, COSTS_N_INSNS
    (1) is a cycle on the pipeline in rtl/cpu.sv - see the cost model under
    [cpu] in isa/fructus.toml - where an ALU instruction is one cycle whatever
-   its length, a load of N bytes N + 3, and a taken branch four.
+   its length, a load of N accesses N + 3, and a taken branch four.  An access
+   is a byte, or a word at an even address; a word at an odd one is two, so
+   ld8 and an aligned ld are 4 and an odd ld 5.
 
    ONLY `mult' TELLS THE TWO APART, and that is measured rather than
-   overlooked.  Pricing a MEM at its cycles for speed - ld 5, ld8 4 - left
-   every -O2 program in the fructus repository's C tests and tests/bench
-   byte for byte the same; so did a TARGET_MEMORY_MOVE_COST of 8 or 12
-   against the default 4, to within six bytes and 21 cycles in 4.3 million,
-   the wrong way.  And BRANCH_COST above 1 made tests/div32.c 2.1% slower
-   and 28 bytes larger - see fructus.h.  The costs gcc falls back on already
-   describe this machine well enough; what did not was the multiply, which
-   -mmul makes one instruction.
+   overlooked.  Pricing a MEM at its cycles for speed - ld 5, ld8 4, when
+   every word went a byte at a time - left every -O2 program in the fructus
+   repository's C tests and tests/bench byte for byte the same; so did a
+   TARGET_MEMORY_MOVE_COST of 8 or 12 against the default 4, to within six
+   bytes and 21 cycles in 4.3 million, the wrong way.  And BRANCH_COST above 1
+   made tests/div32.c 2.1% slower and 28 bytes larger - see fructus.h.  The
+   costs gcc falls back on already describe this machine well enough; what
+   did not was the multiply, which -mmul makes one instruction.
+
+   ALIGNMENT IS MOSTLY SETTLED WHERE THE DATA IS PLACED, NOT IN A PRICE: see
+   DATA_ALIGNMENT in fructus.h.  An unaligned word is still cheaper than two
+   bytes, so the port says nothing of slow unaligned access and lets block
+   moves go by words whatever the pointers are.  The one price that had to
+   change is a byte load widened to a word - fructus_widened_byte_cost.
    ========================================================================== */
 
 /* Whether X is one of the shapes movhi matches: the low byte of a register
@@ -1497,6 +1505,78 @@ fructus_output_movhi_imm (rtx *operands)
   return "movhi\t%0, %1, #%2";
 }
 
+/* Whether an object of TYPE holds words, and so is worth an even address:
+   two bytes or more, and not an array of bytes, which is read a byte at a
+   time wherever it is - a string gains nothing from padding.  */
+
+static bool
+fructus_holds_words_p (const_tree type)
+{
+  if (!type || !TYPE_SIZE_UNIT (type)
+      || !tree_fits_uhwi_p (TYPE_SIZE_UNIT (type))
+      || tree_to_uhwi (TYPE_SIZE_UNIT (type)) < 2)
+    return false;
+  const_tree elt = strip_array_types (const_cast<tree> (type));
+  return (TYPE_SIZE_UNIT (elt) && tree_fits_uhwi_p (TYPE_SIZE_UNIT (elt))
+	  && tree_to_uhwi (TYPE_SIZE_UNIT (elt)) >= 2);
+}
+
+/* DATA_ALIGNMENT: a global or static that holds words goes at an even
+   address.  See fructus.h.  */
+
+unsigned int
+fructus_data_alignment (tree type, unsigned int align)
+{
+  return fructus_holds_words_p (type) && align < 16 ? 16 : align;
+}
+
+/* TARGET_CONSTANT_ALIGNMENT: the same for a constant, but never a string,
+   which is bytes.  */
+
+static HOST_WIDE_INT
+fructus_constant_alignment (const_tree exp, HOST_WIDE_INT align)
+{
+  if (TREE_CODE (exp) == STRING_CST)
+    return align;
+  return fructus_holds_words_p (TREE_TYPE (exp)) && align < 16 ? 16 : align;
+}
+
+/* A BYTE IN MEMORY READ AS A WORD is what a paradoxical subreg of it
+   becomes.  `(u16) *p << 8' combines into a shift of (subreg:HI (mem:QI p)),
+   which reload makes an ld whose high byte the shift throws away; priced as
+   ld8, combine took it over ld8 and its free extension, and half of those
+   words were odd - tests/bench's crc, 256 words a byte at a time.  rtx_cost
+   prices a subreg's MEM in the MEM's own mode and never asks the target
+   about a subreg, so the operation holding it is where it can be seen.  It
+   is priced a cycle more for speed; for size the two are the same two bytes,
+   and a quarter of an instruction breaks the tie the fast way.  Returns
+   whether X has such an operand, with its cost in *TOTAL.  */
+
+static bool
+fructus_widened_byte_cost (rtx x, machine_mode mode, bool speed, int *total)
+{
+  const char *fmt = GET_RTX_FORMAT (GET_CODE (x));
+  bool wide = false;
+  int sum = COSTS_N_INSNS (1);
+  for (int i = GET_RTX_LENGTH (GET_CODE (x)) - 1; i >= 0; i--)
+    if (fmt[i] == 'e')
+      {
+	rtx op = XEXP (x, i);
+	if (SUBREG_P (op) && MEM_P (SUBREG_REG (op))
+	    && paradoxical_subreg_p (op)
+	    && MEM_ALIGN (SUBREG_REG (op)) < 16)
+	  {
+	    wide = true;
+	    sum += speed ? COSTS_N_INSNS (2) : COSTS_N_INSNS (1) + 1;
+	  }
+	else
+	  sum += rtx_cost (op, mode, GET_CODE (x), i, speed);
+      }
+  if (wide)
+    *total = sum;
+  return wide;
+}
+
 static bool
 fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total,
 		   bool speed)
@@ -1511,8 +1591,20 @@ fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total,
       return true;
     }
 
+  if (fructus_widened_byte_cost (x, mode, speed, total))
+    return true;
+
   switch (GET_CODE (x))
     {
+    case ZERO_EXTEND:
+      /* ld8 zero extends on the way in, for nothing - which is also what
+	 fructus_widened_byte_cost's widened word is weighed against.  */
+      if (MEM_P (XEXP (x, 0)))
+	{
+	  *total = COSTS_N_INSNS (1);
+	  return true;
+	}
+      return false;
     case CONST_INT:
       *total = (fructus_imm10_p (INTVAL (x)) || fructus_mask5_p (INTVAL (x))
 		? 0 : COSTS_N_INSNS (1));
@@ -1716,6 +1808,8 @@ fructus_option_override (void)
 
 #undef  TARGET_RTX_COSTS
 #define TARGET_RTX_COSTS fructus_rtx_costs
+#undef  TARGET_CONSTANT_ALIGNMENT
+#define TARGET_CONSTANT_ALIGNMENT fructus_constant_alignment
 #undef  TARGET_SHIFT_TRUNCATION_MASK
 #define TARGET_SHIFT_TRUNCATION_MASK fructus_shift_truncation_mask
 

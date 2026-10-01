@@ -55,9 +55,21 @@
 /* --------------------------------------------------------------------------
    Storage layout
 
-   Sixteen-bit words, little endian, and NO ALIGNMENT ANYWHERE.  The ISA
-   allows an unaligned 16-bit access with no fault and no penalty, so padding
-   would cost bytes and buy nothing; isa/abi.s says the same of the stack.
+   Sixteen-bit words, little endian, and NO ALIGNMENT IN ANY TYPE.  The ISA
+   allows an unaligned 16-bit access with no fault, so a type is never padded
+   and a struct is laid out as packed as its fields; isa/abi.s says the same
+   of the stack.
+
+   BUT AN OBJECT HOLDING WORDS IS PLACED EVEN.  Memory is a word wide, and
+   rtl/cpu.sv moves an aligned word in one access and an odd one a byte at a
+   time, a cycle more for every word.  So DATA_ALIGNMENT gives a global,
+   static or constant whose type holds words - anything of two bytes or more
+   that is not an array of bytes - an even address, at the cost of at most a
+   byte of padding before it.  That is placement, not layout: sizeof, struct
+   offsets and the calling convention are unchanged, and GCC raises an
+   object's alignment only where no other definition of it can bind.  Measured
+   on tests/bench, isort's array of shorts had come out at 0x89, and every
+   access to it went a byte at a time: 19841 cycles of its 192053 at -O2.
    -------------------------------------------------------------------------- */
 
 #define BITS_BIG_ENDIAN  0
@@ -73,6 +85,7 @@
 #define STACK_BOUNDARY 8
 #define FUNCTION_BOUNDARY 8
 #define BIGGEST_ALIGNMENT 8
+#define DATA_ALIGNMENT(TYPE, ALIGN) fructus_data_alignment ((TYPE), (ALIGN))
 #define EMPTY_FIELD_BOUNDARY 8
 #define STRUCTURE_SIZE_BOUNDARY 8
 #define STRICT_ALIGNMENT 0
