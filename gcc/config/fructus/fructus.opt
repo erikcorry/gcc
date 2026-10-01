@@ -24,3 +24,21 @@
 mmul
 Target Mask(MUL)
 Use the mul instruction, which needs a hardware multiplier.
+
+; How a function reaches zero page data - variables with the zp attribute.
+; See `The zero page' in fructus.cc.
+mzp-base=
+Target RejectNegative Joined Enum(fructus_zp_base) Var(fructus_zp_base) Init(1)
+-mzp-base=[auto|always|never]	Reach zero page variables through a base register holding 0x200: when the function's references favour it, always, or never.
+
+Enum
+Name(fructus_zp_base) Type(int)
+
+EnumValue
+Enum(fructus_zp_base) String(never) Value(0)
+
+EnumValue
+Enum(fructus_zp_base) String(auto) Value(1)
+
+EnumValue
+Enum(fructus_zp_base) String(always) Value(2)

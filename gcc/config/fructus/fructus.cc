@@ -50,6 +50,9 @@
 #include "explow.h"
 #include "opts.h"
 #include "tm-constrs.h"
+#include "gimple.h"
+#include "gimple-iterator.h"
+#include "gimple-walk.h"
 #include "config/fructus/fructus-isa.h"
 
 /* This file should be included last.  */
@@ -355,6 +358,10 @@ fructus_mem_length (rtx reg, rtx mem, bool load)
       && REG_P (XEXP (addr, 0)) && REG_P (XEXP (addr, 1)))
     return 2;
 
+  /* The zero page: always the imm10 form, the only one with a relocation.  */
+  if (GET_CODE (addr) == PLUS && fructus_zp_offset_p (XEXP (addr, 1)))
+    return 3;
+
   if (GET_CODE (addr) == PLUS && CONST_INT_P (XEXP (addr, 1)))
     base = XEXP (addr, 0), off = INTVAL (XEXP (addr, 1));
 
@@ -410,6 +417,9 @@ int
 fructus_alu_length (enum rtx_code code, rtx *operands)
 {
   rtx d = operands[0], a = operands[1], b = operands[2];
+
+  if (fructus_zp_offset_p (b))
+    return 3;
 
   if (!CONST_INT_P (b))
     {
@@ -504,7 +514,7 @@ fructus_output_alu (enum rtx_code code, rtx *operands)
     default:   gcc_unreachable ();
     }
 
-  if (CONST_INT_P (operands[2]))
+  if (CONST_INT_P (operands[2]) || fructus_zp_offset_p (operands[2]))
     {
       snprintf (buf, sizeof buf, "%s\t%%0, %%1, #%%2", mn);
       return buf;
@@ -635,6 +645,11 @@ struct GTY(()) machine_function
   int saved[4];
   int nsaved;
   HOST_WIDE_INT frame_size;
+
+  /* The zero page: whether this function reaches it through a base
+     register, decided before expansion, and that register once made.  */
+  bool zp_base_p;
+  rtx zp_base;
 };
 
 static struct machine_function *
@@ -1293,11 +1308,525 @@ fructus_base_reg_ok_p (rtx x, bool strict)
   return regno >= FIRST_PSEUDO_REGISTER || FRUCTUS_BASE_REGNO_P (regno);
 }
 
+/* ==========================================================================
+   The zero page
+
+   0x0000-0x03ff, reached as [rb, #imm10] with rb holding 0x200: imm10 is
+   signed, so the base in the middle reaches the whole kilobyte.  A variable
+   goes there by attribute,
+
+       int count __attribute__ ((zp));          zp_lo, 0x0000-0x01ff
+       int flags __attribute__ ((zp ("hi")));   zp_hi, 0x0200-0x03ff
+
+   in sections .zplo or .zphi, or .zplo.bss and .zphi.bss when it starts at
+   zero, which the linker scripts place.  Its address is still an ordinary
+   one, and `mov rd, #x' then `ld rd, [rd, #0]' still reaches it.  What the
+   attribute adds is the other way:
+
+       mov  r4, #0x200                 2 bytes, once
+       ld   r0, [r4, #zp(count)]       3 bytes, R_FRUCTUS_ZP10
+       st   r1, [r4, #zp(flags)]
+
+   The offset is the linker's, so the form is always the three-byte imm10
+   one - nothing shorter can carry the relocation.
+
+   WHICH IS SMALLER DEPENDS ON THE FUNCTION.  A direct access to d distinct
+   variables making r references costs 3d + 2r bytes, if each address is
+   kept in a register; through the base it is 2 + 3r, in one register.  So
+   the base wins with several variables and loses with one variable used
+   often.  fructus_expand_to_rtl_hook counts both in the GIMPLE and decides
+   for the whole function - -mzp-base=auto, the default; =always and =never
+   override it.  Within the function the base is one pseudo set once at the
+   top, so the register allocator makes the remaining choice: keep it in a
+   register, or rematerialize the two-byte mov where it is needed.
+   ========================================================================== */
+
+#define FRUCTUS_ZP_BASE 0x200
+#define SYMBOL_FLAG_ZP SYMBOL_FLAG_MACH_DEP
+
+/* Which half of the zero page DECL's attribute asks for, or NULL.  */
+
+static const char *
+fructus_zp_half (const_tree decl)
+{
+  if (!VAR_P (decl))
+    return NULL;
+  tree a = lookup_attribute ("zp", DECL_ATTRIBUTES (decl));
+  if (!a)
+    return NULL;
+  tree args = TREE_VALUE (a);
+  if (args && TREE_CODE (TREE_VALUE (args)) == STRING_CST
+      && strcmp (TREE_STRING_POINTER (TREE_VALUE (args)), "hi") == 0)
+    return "hi";
+  return "lo";
+}
+
+/* Whether DECL lives in the zero page: by attribute, or put in one of its
+   sections by hand.  */
+
+static bool
+fructus_zp_decl_p (const_tree decl)
+{
+  if (!VAR_P (decl) || (!TREE_STATIC (decl) && !DECL_EXTERNAL (decl)))
+    return false;
+  if (fructus_zp_half (decl))
+    return true;
+  const char *sec = DECL_SECTION_NAME (decl);
+  return sec && (startswith (sec, ".zplo") || startswith (sec, ".zphi"));
+}
+
+static tree
+fructus_handle_zp_attribute (tree *node, tree name, tree args, int,
+			     bool *no_add_attrs)
+{
+  tree decl = *node;
+
+  if (!VAR_P (decl) || (!TREE_STATIC (decl) && !DECL_EXTERNAL (decl)))
+    {
+      warning (OPT_Wattributes,
+	       "%qE attribute applies only to variables with static storage",
+	       name);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  if (args)
+    {
+      tree a = TREE_VALUE (args);
+      if (TREE_CODE (a) != STRING_CST
+	  || (strcmp (TREE_STRING_POINTER (a), "lo") != 0
+	      && strcmp (TREE_STRING_POINTER (a), "hi") != 0))
+	{
+	  error ("argument of %qE attribute must be %qs or %qs",
+		 name, "lo", "hi");
+	  *no_add_attrs = true;
+	  return NULL_TREE;
+	}
+    }
+  if (DECL_SECTION_NAME (decl))
+    {
+      error ("%qE attribute conflicts with a section attribute", name);
+      *no_add_attrs = true;
+      return NULL_TREE;
+    }
+  /* A common symbol is placed by the linker in .bss, out of reach.  */
+  DECL_COMMON (decl) = 0;
+  return NULL_TREE;
+}
+
+TARGET_GNU_ATTRIBUTES (fructus_attribute_table,
+  {
+    /* { name, min_num_args, max_num_args, decl_req, type_req, fn_type_req,
+	 affects_type_identity, handler, exclude } */
+    { "zp", 0, 1, true, false, false, false, fructus_handle_zp_attribute,
+      NULL }
+  });
+
+/* The section is chosen here and not by select_section, because varasm
+   sends a zero-initialised static to .lcomm and -fdata-sections to a section
+   of its own before select_section is asked.  A named section bypasses both.
+   By now the initializer is known, so .bss or not can be decided.  */
+
+static void
+fructus_encode_section_info (tree decl, rtx rtl, int first)
+{
+  default_encode_section_info (decl, rtl, first);
+
+  if (!VAR_P (decl) || !MEM_P (rtl) || GET_CODE (XEXP (rtl, 0)) != SYMBOL_REF)
+    return;
+
+  const char *half = fructus_zp_half (decl);
+  if (half && first && !DECL_EXTERNAL (decl) && !DECL_SECTION_NAME (decl))
+    set_decl_section_name (decl, (bss_initializer_p (decl)
+				  ? (*half == 'h' ? ".zphi.bss" : ".zplo.bss")
+				  : (*half == 'h' ? ".zphi" : ".zplo")));
+  if (fructus_zp_decl_p (decl))
+    SYMBOL_REF_FLAGS (XEXP (rtl, 0)) |= SYMBOL_FLAG_ZP;
+}
+
+static unsigned int
+fructus_section_type_flags (tree decl, const char *name, int reloc)
+{
+  unsigned int flags = default_section_type_flags (decl, name, reloc);
+  /* NOTYPE is the default's for a name it does not know, and would leave
+     the section @progbits.  */
+  if (startswith (name, ".zplo.bss") || startswith (name, ".zphi.bss"))
+    flags = (flags & ~SECTION_NOTYPE) | SECTION_BSS;
+  return flags;
+}
+
+/* Whether X is the address of zero page data - a flagged SYMBOL_REF, or one
+   plus a constant - and if so, which and how far into it.  */
+
+static bool
+fructus_zp_symbolic_p (rtx x, rtx *sym, HOST_WIDE_INT *off)
+{
+  *off = 0;
+  if (GET_CODE (x) == CONST)
+    {
+      x = XEXP (x, 0);
+      if (GET_CODE (x) != PLUS || !CONST_INT_P (XEXP (x, 1)))
+	return false;
+      *off = INTVAL (XEXP (x, 1));
+      x = XEXP (x, 0);
+    }
+  if (GET_CODE (x) != SYMBOL_REF || !(SYMBOL_REF_FLAGS (x) & SYMBOL_FLAG_ZP))
+    return false;
+  *sym = x;
+  return true;
+}
+
+bool
+fructus_zp_address_p (rtx x)
+{
+  rtx sym;
+  HOST_WIDE_INT off;
+  return fructus_zp_symbolic_p (x, &sym, &off);
+}
+
+/* The displacement of a zero page address from the base, as an operand:
+   (const (unspec [sym] UNSPEC_ZP)), with (plus ... (const_int OFF)) inside
+   the const when OFF is not zero.  It prints as `zp(sym+OFF)'.  */
+
+static rtx
+fructus_zp_offset (rtx sym, HOST_WIDE_INT off)
+{
+  rtx u = gen_rtx_UNSPEC (Pmode, gen_rtvec (1, sym), UNSPEC_ZP);
+  if (off)
+    u = gen_rtx_PLUS (Pmode, u, GEN_INT (off));
+  return gen_rtx_CONST (Pmode, u);
+}
+
+static bool
+fructus_zp_offset_split (rtx x, rtx *sym, HOST_WIDE_INT *off)
+{
+  *off = 0;
+  if (GET_CODE (x) != CONST)
+    return false;
+  x = XEXP (x, 0);
+  if (GET_CODE (x) == PLUS && CONST_INT_P (XEXP (x, 1)))
+    {
+      *off = INTVAL (XEXP (x, 1));
+      x = XEXP (x, 0);
+    }
+  if (GET_CODE (x) != UNSPEC || XINT (x, 1) != UNSPEC_ZP)
+    return false;
+  *sym = XVECEXP (x, 0, 0);
+  return true;
+}
+
+bool
+fructus_zp_offset_p (rtx x)
+{
+  rtx sym;
+  HOST_WIDE_INT off;
+  return fructus_zp_offset_split (x, &sym, &off);
+}
+
+/* Whether zp(SYM+K) is sure to fit its field: S + K - 0x200 must be in
+   -512..511, and only an address inside the object is sure to be in the
+   zero page.  Without this, combine folds the base's value into the
+   offset - [ri, #zp(a+512)] for a[i] - which is the right address and fits
+   only if `a' is below 0x200.  */
+
+static bool
+fructus_zp_offset_in_object (rtx sym, HOST_WIDE_INT k)
+{
+  tree decl = SYMBOL_REF_DECL (sym);
+  if (k == 0)
+    return true;
+  if (!decl || !DECL_SIZE_UNIT (decl) || !tree_fits_shwi_p (DECL_SIZE_UNIT (decl)))
+    return false;
+  return k > 0 && k < tree_to_shwi (DECL_SIZE_UNIT (decl));
+}
+
+static void
+fructus_print_zp_offset (FILE *file, rtx x)
+{
+  rtx sym;
+  HOST_WIDE_INT off;
+  if (!fructus_zp_offset_split (x, &sym, &off))
+    gcc_unreachable ();
+  fputs ("zp(", file);
+  output_addr_const (file, sym);
+  if (off)
+    fprintf (file, "%+" HOST_WIDE_INT_PRINT "d", off);
+  fputc (')', file);
+}
+
+/* The base register, made the first time a function needs it, with its one
+   set at the top of the function - after parm_birth_insn, in the topmost
+   sequence whatever sequence the caller is in.  */
+
+static rtx
+fructus_zp_base_reg (void)
+{
+  machine_function *m = cfun->machine;
+  if (!m->zp_base)
+    {
+      m->zp_base = gen_reg_rtx (Pmode);
+      start_sequence ();
+      emit_move_insn (m->zp_base, GEN_INT (FRUCTUS_ZP_BASE));
+      rtx_insn *seq = end_sequence ();
+      push_topmost_sequence ();
+      emit_insn_after (seq, parm_birth_insn);
+      pop_topmost_sequence ();
+    }
+  return m->zp_base;
+}
+
+/* Flatten a sum into its zero page part - a symbol, which still needs the
+   base added, or an offset from the base, whose base is among the other
+   terms - its constant part, and everything else.  At most one zero page
+   part, and at most four other terms, or false.  */
+
+struct fructus_zp_sum
+{
+  rtx sym;
+  bool need_base;
+  HOST_WIDE_INT off;
+  rtx terms[4];
+  int nterms;
+};
+
+static bool
+fructus_zp_flatten (rtx x, fructus_zp_sum *z)
+{
+  rtx sym;
+  HOST_WIDE_INT off;
+
+  if (GET_CODE (x) == PLUS)
+    return (fructus_zp_flatten (XEXP (x, 0), z)
+	    && fructus_zp_flatten (XEXP (x, 1), z));
+  if (CONST_INT_P (x))
+    {
+      z->off += INTVAL (x);
+      return true;
+    }
+  bool symbolic = fructus_zp_symbolic_p (x, &sym, &off);
+  if (symbolic || fructus_zp_offset_split (x, &sym, &off))
+    {
+      if (z->sym)
+	return false;
+      z->sym = sym;
+      z->need_base = symbolic;
+      z->off += off;
+      return true;
+    }
+  if (z->nterms == 4)
+    return false;
+  z->terms[z->nterms++] = x;
+  return true;
+}
+
+/* A zero page address is not a CONSTANT_ADDRESS_P (see fructus.h), so
+   memory_address brings it here rather than straight to force_reg.  Outside
+   expansion, or in a function that decided against the base, it goes to a
+   register as any other constant address would.
+
+   With the base, a zero page address with a constant offset becomes
+   [rb, #zp(x+k)].  One with an index does not: `mov rt, #a; ld rd, [rt,
+   ri]' is five bytes and needs no base, where `add rt, ri, rb; ld rd, [rt,
+   #zp(a)]' is five as well and does.  So an index turns the address back
+   into a direct one - including one that was [rb, #zp(a)] before the index
+   was added to it, whose base is then among the terms and is dropped.  */
+
+static rtx
+fructus_legitimize_address (rtx x, rtx, machine_mode)
+{
+  rtx sym;
+  HOST_WIDE_INT off;
+  bool base = (currently_expanding_to_rtl && cfun && cfun->machine->zp_base_p
+	       && can_create_pseudo_p ());
+
+  if (!base)
+    return fructus_zp_symbolic_p (x, &sym, &off) ? force_reg (Pmode, x) : x;
+
+  fructus_zp_sum z = {};
+  if (!fructus_zp_flatten (x, &z) || !z.sym)
+    return x;
+
+  /* An offset from the base has the base among its terms; it is accounted
+     for by the offset's bias, so it goes.  If it cannot be found the sum is
+     left alone.  */
+  if (!z.need_base)
+    {
+      int i;
+      for (i = 0; i < z.nterms && z.terms[i] != cfun->machine->zp_base; i++)
+	;
+      if (i == z.nterms)
+	return x;
+      z.terms[i] = z.terms[--z.nterms];
+    }
+
+  rtx direct = plus_constant (Pmode, z.sym, z.off);
+
+  /* A constant offset: [rb, #zp(x+k)], or, with k outside the object, the
+     address in a register.  */
+  if (z.nterms == 0)
+    return (fructus_zp_offset_in_object (z.sym, z.off)
+	    ? gen_rtx_PLUS (Pmode, fructus_zp_base_reg (),
+			    fructus_zp_offset (z.sym, z.off))
+	    : force_reg (Pmode, direct));
+
+  /* An index: [rt, ri] with rt the address, the other terms added to ri.  */
+  rtx r = force_operand (z.terms[0], NULL_RTX);
+  for (int i = 1; i < z.nterms; i++)
+    r = expand_simple_binop (Pmode, PLUS, r,
+			     force_operand (z.terms[i], NULL_RTX),
+			     NULL_RTX, 0, OPTAB_LIB_WIDEN);
+  return gen_rtx_PLUS (Pmode, force_reg (Pmode, direct), force_reg (Pmode, r));
+}
+
+/* The zero page decision.  Every memory reference to zero page data counts
+   - a VAR_DECL, or a MEM_REF through its address - and an address taken
+   as a value does not, since the base cannot help with that.  */
+
+struct fructus_zp_count
+{
+  hash_set<tree> *seen;
+  int refs;
+};
+
+static void
+fructus_zp_note (fructus_zp_count *c, tree t)
+{
+  if (t && fructus_zp_decl_p (t))
+    {
+      c->seen->add (t);
+      c->refs++;
+    }
+}
+
+static tree
+fructus_zp_walk (tree *tp, int *walk_subtrees, void *data)
+{
+  fructus_zp_count *c
+    = (fructus_zp_count *) ((struct walk_stmt_info *) data)->info;
+  tree t = *tp;
+
+  if (TYPE_P (t))
+    *walk_subtrees = 0;
+  else if (TREE_CODE (t) == ADDR_EXPR)
+    *walk_subtrees = 0;
+  else if ((TREE_CODE (t) == ARRAY_REF || TREE_CODE (t) == ARRAY_RANGE_REF)
+	   && TREE_CODE (TREE_OPERAND (t, 1)) != INTEGER_CST)
+    {
+      /* An element at a variable index is reached [rt, ri] either way, so
+	 it counts for neither; its index might itself be zero page data.  */
+      walk_tree (&TREE_OPERAND (t, 1), fructus_zp_walk, data, NULL);
+      tree base = TREE_OPERAND (t, 0);
+      while (handled_component_p (base))
+	base = TREE_OPERAND (base, 0);
+      if (!VAR_P (base))
+	walk_tree (&TREE_OPERAND (t, 0), fructus_zp_walk, data, NULL);
+      *walk_subtrees = 0;
+    }
+  else if (TREE_CODE (t) == TARGET_MEM_REF && TMR_INDEX (t))
+    *walk_subtrees = 0;
+  else if ((TREE_CODE (t) == MEM_REF || TREE_CODE (t) == TARGET_MEM_REF)
+	   && TREE_CODE (TREE_OPERAND (t, 0)) == ADDR_EXPR)
+    {
+      fructus_zp_note (c, get_base_address (TREE_OPERAND
+					    (TREE_OPERAND (t, 0), 0)));
+      *walk_subtrees = 0;
+    }
+  else if (VAR_P (t))
+    fructus_zp_note (c, t);
+  return NULL_TREE;
+}
+
+static void
+fructus_expand_to_rtl_hook (void)
+{
+  machine_function *m = cfun->machine;
+  m->zp_base = NULL_RTX;
+  m->zp_base_p = fructus_zp_base == 2;
+  if (fructus_zp_base != 1)
+    return;
+
+  hash_set<tree> seen;
+  fructus_zp_count c = { &seen, 0 };
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	if (is_gimple_debug (gsi_stmt (gsi)))
+	  continue;
+	struct walk_stmt_info wi;
+	memset (&wi, 0, sizeof wi);
+	wi.info = &c;
+	walk_gimple_op (gsi_stmt (gsi), fructus_zp_walk, &wi);
+      }
+
+  /* Through the base: 2 + 3r.  Direct: 3d + 2r.  A tie goes to the base,
+     which holds one register where direct access holds d.  */
+  int d = seen.elements ();
+  m->zp_base_p = d >= 2 && 2 + 3 * c.refs <= 3 * d + 2 * c.refs;
+}
+
+/* For debug information: [rb, #zp(x+n)] is x + n.  */
+
+static rtx
+fructus_delegitimize_address (rtx x)
+{
+  rtx orig = delegitimize_mem_from_attrs (x);
+  rtx a = MEM_P (orig) ? XEXP (orig, 0) : orig, sym;
+  HOST_WIDE_INT off;
+
+  if (GET_CODE (a) == PLUS && REG_P (XEXP (a, 0))
+      && fructus_zp_offset_split (XEXP (a, 1), &sym, &off))
+    a = plus_constant (Pmode, sym, off);
+  else if (fructus_zp_offset_split (a, &sym, &off))
+    a = plus_constant (Pmode, sym, off - FRUCTUS_ZP_BASE);
+  else
+    return orig;
+  return MEM_P (orig) ? replace_equiv_address_nv (orig, a) : a;
+}
+
+static bool
+fructus_output_addr_const_extra (FILE *file, rtx x)
+{
+  if (GET_CODE (x) == UNSPEC && XINT (x, 1) == UNSPEC_ZP)
+    {
+      fputs ("zp(", file);
+      output_addr_const (file, XVECEXP (x, 0, 0));
+      fputc (')', file);
+      return true;
+    }
+  return false;
+}
+
+/* A zero page offset is an operand of an address or of an add, and never a
+   value on its own: no mov can carry it.  */
+
+static bool
+fructus_legitimate_constant_p (machine_mode, rtx x)
+{
+  return !fructus_zp_offset_p (x);
+}
+
+static bool
+fructus_cannot_force_const_mem (machine_mode, rtx x)
+{
+  return fructus_zp_offset_p (x);
+}
+
 static bool
 fructus_legitimate_address_p (machine_mode mode, rtx x, bool strict,
 			      code_helper = ERROR_MARK)
 {
   if (fructus_base_reg_ok_p (x, strict))
+    return true;
+
+  /* The zero page: [rb, #zp(x)], whatever the mode.  The linker checks the
+     range, including a 32-bit access's second word at +2.  */
+  rtx sym;
+  HOST_WIDE_INT k;
+  if (GET_CODE (x) == PLUS
+      && fructus_base_reg_ok_p (XEXP (x, 0), strict)
+      && fructus_zp_offset_split (XEXP (x, 1), &sym, &k)
+      && fructus_zp_offset_in_object (sym, k))
     return true;
 
   if (GET_CODE (x) == PLUS
@@ -1342,6 +1871,15 @@ fructus_print_operand_address (FILE *file, machine_mode, rtx addr)
     {
       fprintf (file, "[%s, %s]", reg_names[REGNO (XEXP (addr, 0))],
 	       reg_names[REGNO (XEXP (addr, 1))]);
+      return;
+    }
+
+  if (GET_CODE (addr) == PLUS && REG_P (XEXP (addr, 0))
+      && fructus_zp_offset_p (XEXP (addr, 1)))
+    {
+      fprintf (file, "[%s, #", reg_names[REGNO (XEXP (addr, 0))]);
+      fructus_print_zp_offset (file, XEXP (addr, 1));
+      fputc (']', file);
       return;
     }
 
@@ -1393,7 +1931,9 @@ fructus_print_operand (FILE *file, rtx x, int code)
       fprintf (file, HOST_WIDE_INT_PRINT_DEC, INTVAL (x));
       return;
     default:
-      if (CONSTANT_P (x))
+      if (fructus_zp_offset_p (x))
+	fructus_print_zp_offset (file, x);
+      else if (CONSTANT_P (x))
 	output_addr_const (file, x);
       else
 	output_operand_lossage ("invalid operand");
@@ -1766,6 +2306,25 @@ fructus_option_override (void)
 #define TARGET_PRINT_OPERAND fructus_print_operand
 #undef  TARGET_PRINT_OPERAND_ADDRESS
 #define TARGET_PRINT_OPERAND_ADDRESS fructus_print_operand_address
+
+#undef  TARGET_ATTRIBUTE_TABLE
+#define TARGET_ATTRIBUTE_TABLE fructus_attribute_table
+#undef  TARGET_ENCODE_SECTION_INFO
+#define TARGET_ENCODE_SECTION_INFO fructus_encode_section_info
+#undef  TARGET_SECTION_TYPE_FLAGS
+#define TARGET_SECTION_TYPE_FLAGS fructus_section_type_flags
+#undef  TARGET_LEGITIMIZE_ADDRESS
+#define TARGET_LEGITIMIZE_ADDRESS fructus_legitimize_address
+#undef  TARGET_EXPAND_TO_RTL_HOOK
+#define TARGET_EXPAND_TO_RTL_HOOK fructus_expand_to_rtl_hook
+#undef  TARGET_DELEGITIMIZE_ADDRESS
+#define TARGET_DELEGITIMIZE_ADDRESS fructus_delegitimize_address
+#undef  TARGET_ASM_OUTPUT_ADDR_CONST_EXTRA
+#define TARGET_ASM_OUTPUT_ADDR_CONST_EXTRA fructus_output_addr_const_extra
+#undef  TARGET_LEGITIMATE_CONSTANT_P
+#define TARGET_LEGITIMATE_CONSTANT_P fructus_legitimate_constant_p
+#undef  TARGET_CANNOT_FORCE_CONST_MEM
+#define TARGET_CANNOT_FORCE_CONST_MEM fructus_cannot_force_const_mem
 
 #undef  TARGET_LEGITIMATE_ADDRESS_P
 #define TARGET_LEGITIMATE_ADDRESS_P fructus_legitimate_address_p

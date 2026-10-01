@@ -25,6 +25,13 @@
 	    (match_test "fructus_alu_imm_p (PLUS, INTVAL (op), true)"))))
 
 ;; A register or an imm10 - rsb and iseq, which have no mask forms.
+;; addhi3's operand: as above, or a zero page offset, `add rd, rb, #zp(x)'.
+;; Nothing but an address reload asks for one - LRA computing the address
+;; [rb, #zp(x)] in a register - and gen_add3_insn finds only addhi3.
+(define_predicate "fructus_add_operand"
+  (ior (match_operand 0 "fructus_alu_operand")
+       (match_test "fructus_zp_offset_p (op)")))
+
 (define_predicate "fructus_imm10_operand"
   (ior (match_operand 0 "register_operand")
        (and (match_code "const_int")

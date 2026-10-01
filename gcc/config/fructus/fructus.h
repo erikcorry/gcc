@@ -201,6 +201,17 @@ enum reg_class
 
 #define FRUCTUS_BASE_REGNO_P(N) ((unsigned) (N) < FIRST_PSEUDO_REGISTER)
 
+/* There is no absolute addressing, so a constant address is always loaded
+   into a register - except a zero page one, which fructus_legitimize_address
+   may instead turn into [rb, #zp(x)].  memory_address sends a
+   CONSTANT_ADDRESS_P straight to force_reg, and break_out_memory_refs pulls
+   one out of a sum into a register, so neither a zero page address nor the
+   #zp(x) offset made from it may be one: the offset would be separated from
+   its base when an index is added to [rb, #zp(x)].  */
+#define CONSTANT_ADDRESS_P(X) \
+  (CONSTANT_P (X) && GET_CODE (X) != CONST_DOUBLE \
+   && !fructus_zp_address_p (X) && !fructus_zp_offset_p (X))
+
 #ifdef REG_OK_STRICT
 #define REGNO_OK_FOR_BASE_P(N) \
   (FRUCTUS_BASE_REGNO_P (N) || FRUCTUS_BASE_REGNO_P (reg_renumber[N]))

@@ -41,7 +41,7 @@
    (SP_REGNUM  6)
    (LR_REGNUM  7)])
 
-(define_c_enum "unspec" [UNSPEC_CALLEE_CC UNSPEC_CLMUL])
+(define_c_enum "unspec" [UNSPEC_CALLEE_CC UNSPEC_CLMUL UNSPEC_ZP])
 (define_c_enum "unspecv" [UNSPECV_BLOCKAGE])
 
 (define_attr "length" "" (const_int 2))
@@ -210,7 +210,7 @@
 (define_insn "addhi3"
   [(set (match_operand:HI 0 "register_operand" "=r,r,r")
 	(plus:HI (match_operand:HI 1 "register_operand" "%0,r,r")
-		 (match_operand:HI 2 "fructus_alu_operand" "IK,I,r")))]
+		 (match_operand:HI 2 "fructus_add_operand" "IK,IZ,r")))]
   ""
 {
   return fructus_output_alu (PLUS, operands);

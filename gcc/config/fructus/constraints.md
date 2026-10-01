@@ -32,6 +32,10 @@
   (and (match_code "const_int")
        (match_test "fructus_mask5_p (ival)")))
 
+(define_constraint "Z"
+  "A zero page offset, #zp(sym): an imm10 the linker fills in."
+  (match_test "fructus_zp_offset_p (op)"))
+
 (define_constraint "J"
   "A shift count the tied imm5 form carries: 0 to 15."
   (and (match_code "const_int")
