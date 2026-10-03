@@ -695,7 +695,17 @@ fructus_compute_frame (void)
   for (unsigned i = 0; i < ARRAY_SIZE (order); i++)
     if (fructus_save_reg_p (order[i]))
       m->saved[m->nsaved++] = order[i];
-  m->frame_size = get_frame_size ();
+  /* Rounded to a word, so that sp stays even: STACK_BOUNDARY.  The saved
+     registers are words already.  */
+  m->frame_size = ROUND_UP (get_frame_size (), STACK_BOUNDARY / BITS_PER_UNIT);
+}
+
+/* PUSH_ROUNDING: a push is a whole number of words.  See fructus.h.  */
+
+poly_int64
+fructus_push_rounding (poly_int64 bytes)
+{
+  return (bytes + 1) & ~1;
 }
 
 HOST_WIDE_INT
@@ -2000,9 +2010,9 @@ fructus_shift_truncation_mask (machine_mode mode)
    costs gcc falls back on already describe this machine well enough; what
    did not was the multiply, which -mmul makes one instruction.
 
-   ALIGNMENT IS MOSTLY SETTLED WHERE THE DATA IS PLACED, NOT IN A PRICE: see
-   DATA_ALIGNMENT in fructus.h.  An unaligned word is still cheaper than two
-   bytes, so the port says nothing of slow unaligned access and lets block
+   ALIGNMENT IS SETTLED BY THE LAYOUT, NOT BY A PRICE: every type holding
+   words is aligned to two - see fructus.h.  An unaligned word is still
+   cheaper than two bytes, so the port says nothing of slow unaligned access and lets block
    moves go by words whatever the pointers are.  The one price that had to
    change is a byte load widened to a word - fructus_widened_byte_cost.
    ========================================================================== */

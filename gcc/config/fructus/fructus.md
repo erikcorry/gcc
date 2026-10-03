@@ -105,17 +105,18 @@
 ;; pre-decrement and a pop a post-increment.
 ;; -------------------------------------------------------------------------
 
-;; There is no byte push: `push8` was deleted to free the opcodes the
-;; three-register stm and ldm needed.  The ABI still packs a byte argument
-;; unpadded, so the slot is made and then stored into.  Two instructions where
-;; there was one, on a shape that needs a call with more arguments than the
-;; registers carry AND a byte among the ones that spill.
+;; There is no byte push, and none is needed: a byte argument takes a word
+;; slot with the value in its low byte and the high byte unspecified, as in a
+;; register, so a word push of the register holding it is the byte push.
+;; Little endian puts the low byte at sp.  The RTL says sp moves by two and
+;; only the byte is stored, which is all a caller or callee may rely on;
+;; PUSH_ROUNDING says the same to the argument layout.
 (define_insn "pushqi1"
-  [(set (mem:QI (pre_dec:HI (reg:HI SP_REGNUM)))
+  [(set (reg:HI SP_REGNUM) (plus:HI (reg:HI SP_REGNUM) (const_int -2)))
+   (set (mem:QI (plus:HI (reg:HI SP_REGNUM) (const_int -2)))
 	(match_operand:QI 0 "fructus_push_operand" "r"))]
   ""
-  "add\tsp, sp, #-1\n\tst8\t%0, [sp, #0]"
-  [(set_attr "length" "4")])
+  "push\t%0")
 
 (define_insn "pushhi1"
   [(set (mem:HI (pre_dec:HI (reg:HI SP_REGNUM)))

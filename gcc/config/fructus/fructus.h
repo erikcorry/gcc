@@ -55,21 +55,33 @@
 /* --------------------------------------------------------------------------
    Storage layout
 
-   Sixteen-bit words, little endian, and NO ALIGNMENT IN ANY TYPE.  The ISA
-   allows an unaligned 16-bit access with no fault, so a type is never padded
-   and a struct is laid out as packed as its fields; isa/abi.s says the same
-   of the stack.
+   Sixteen-bit words, little endian, and EVERY TYPE OF TWO BYTES OR MORE IS
+   ALIGNED TO TWO.  Memory is a word wide, and rtl/cpu.sv moves an aligned
+   word in one access and an odd one a byte at a time, a cycle more for every
+   word.  The ISA still allows the odd access with no fault, so nothing here
+   is about correctness: it is where the data lands.
 
-   BUT AN OBJECT HOLDING WORDS IS PLACED EVEN.  Memory is a word wide, and
-   rtl/cpu.sv moves an aligned word in one access and an odd one a byte at a
-   time, a cycle more for every word.  So DATA_ALIGNMENT gives a global,
-   static or constant whose type holds words - anything of two bytes or more
-   that is not an array of bytes - an even address, at the cost of at most a
-   byte of padding before it.  That is placement, not layout: sizeof, struct
-   offsets and the calling convention are unchanged, and GCC raises an
-   object's alignment only where no other definition of it can bind.  Measured
-   on tests/bench, isort's array of shorts had come out at 0x89, and every
-   access to it went a byte at a time: 19841 cycles of its 192053 at -O2.
+   So the layout is the conventional one.  A char is aligned to one, and
+   short, int, long, float, a pointer and anything holding one of them to
+   two - never four, because no access is wider than a word.  Struct fields
+   are in declaration order, each padded up to its own alignment, and a
+   struct's size is rounded up to the largest alignment among its fields:
+   { char a; int b; char c; } is a at 0, b at 2, c at 4, size 6.  A struct of
+   chars only is still byte aligned and unpadded.  C++ places a derived class's
+   fields in a non-POD base's tail padding, as the Itanium ABI says.  The stack
+   is the same: sp is always even and every stack slot is a whole number of
+   words.  See isa/abi.s.
+
+   IT WAS PACKED, while an odd word cost nothing.  Once it did, DATA_ALIGNMENT
+   below placed globals holding words at even addresses, but that is placement
+   only: a short in a struct after a char, or a local after a byte argument on
+   the stack, stayed odd.  Only the layout itself could reach those.
+
+   DATA_ALIGNMENT STILL HAS ONE CASE OF ITS OWN: an object of two bytes or
+   more made only of chars, such as struct { char a, b; }, whose type is byte
+   aligned but which block moves copy by the word.  It goes at an even address,
+   at the cost of at most a byte before it.  An array of bytes is left alone,
+   since a string is read a byte at a time wherever it is.
    -------------------------------------------------------------------------- */
 
 #define BITS_BIG_ENDIAN  0
@@ -81,10 +93,10 @@
 #define Pmode HImode
 #define FUNCTION_MODE QImode
 
-#define PARM_BOUNDARY 8
-#define STACK_BOUNDARY 8
+#define PARM_BOUNDARY 16
+#define STACK_BOUNDARY 16
 #define FUNCTION_BOUNDARY 8
-#define BIGGEST_ALIGNMENT 8
+#define BIGGEST_ALIGNMENT 16
 #define DATA_ALIGNMENT(TYPE, ALIGN) fructus_data_alignment ((TYPE), (ALIGN))
 #define EMPTY_FIELD_BOUNDARY 8
 #define STRUCTURE_SIZE_BOUNDARY 8
@@ -240,7 +252,9 @@ enum reg_class
 #define STACK_GROWS_DOWNWARD 1
 #define FRAME_GROWS_DOWNWARD 0
 #define FIRST_PARM_OFFSET(F) 0
-#define PUSH_ROUNDING(BYTES) (BYTES)
+/* A push is a whole number of words, so sp stays even: a byte argument
+   takes a word slot, value in the low byte - see pushqi1.  */
+#define PUSH_ROUNDING(BYTES) fructus_push_rounding (BYTES)
 #define ACCUMULATE_OUTGOING_ARGS 0
 
 #define STACK_POINTER_REGNUM FRUCTUS_SP

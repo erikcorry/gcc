@@ -27,6 +27,7 @@ extern bool fructus_shift3_p (HOST_WIDE_INT);
 extern bool fructus_mask5_p (HOST_WIDE_INT);
 
 extern HOST_WIDE_INT fructus_initial_elimination_offset (int, int);
+extern poly_int64 fructus_push_rounding (poly_int64);
 extern void fructus_expand_prologue (void);
 extern void fructus_expand_epilogue (bool);
 

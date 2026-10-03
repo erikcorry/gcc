@@ -77,7 +77,9 @@ that compiled callees keep exactly the registers `isa/abi.s` says they keep.
   `jmp r5`, one byte, and touches lr not at all — so a leaf function with a
   switch table no longer saves it. r4 is a frame pointer only when the frame
   has a variable size.
-- **No alignment anywhere**, as the ABI says: every type is byte aligned.
+- **Words aligned to two**, as the ABI says: char is byte aligned, every
+  wider type 2-byte aligned, structs laid out conventionally, and sp always
+  even - a byte argument takes a word slot and is pushed with `push`.
 - **Pushes never push sp.** GCC's `(set (mem (pre_dec sp)) (reg sp))` stores
   the old sp; the ISA stores the new one.
 - **libgcc** uses the parent repository's hand-written `lib1funcs.s` for the
