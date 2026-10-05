@@ -705,36 +705,19 @@
   DONE;
 })
 
-;; -x overflows only for -32768, which is lt #-32767.
+;; -x overflows only for -32768.
 (define_expand "negvhi3"
   [(match_operand:HI 0 "register_operand")
    (match_operand:HI 1 "register_operand")
    (match_operand 2 "")]
   ""
 {
-  rtx a = operands[1];
-  rtx t = gen_reg_rtx (HImode);
-  emit_insn (gen_neghi2 (t, a));
-  if (reg_overlap_mentioned_p (operands[0], a))
-    a = copy_to_reg (a);
-  emit_move_insn (operands[0], t);
-  emit_cmp_and_jump_insns (a, gen_int_mode (-32767, HImode), LT, NULL_RTX,
-			   HImode, 0, as_a <rtx_code_label *> (operands[2]));
+  fructus_expand_addsubv (operands, NEG);
   DONE;
 })
 
 ;; br vs and br vc: taken when %0 - %1 overflows, or does not.  The unspec
 ;; is that overflow as a value, there being no RTL code for it.
-(define_expand "fructus_branch_vs"
-  [(set (pc)
-	(if_then_else (ne (unspec:HI [(match_operand:HI 0 "register_operand")
-				      (match_operand:HI 1 "register_operand")]
-				     UNSPEC_SUBV)
-			  (const_int 0))
-		      (label_ref (match_operand 2 ""))
-		      (pc)))]
-  "")
-
 (define_insn "*branch_v_<code>"
   [(set (pc)
 	(if_then_else (eqne (unspec:HI [(match_operand:HI 0 "register_operand" "r")
