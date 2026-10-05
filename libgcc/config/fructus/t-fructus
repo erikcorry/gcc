@@ -35,13 +35,14 @@
 #   lib2div.c       16- and 32-bit division and remainder
 #   lib2mul.c       __muldi3_mul, the 64-bit product -mmul calls, on top of
 #                   lib1funcs.S's routines that use the multiplier
-#   lib2bitcountHI.c  16-bit clz/ctz/popcount/parity/ffs, shared with msp430
+#   lib2bitcountHI.c  16-bit clz/ctz/popcount/parity/ffs/clrsb, msp430's
+#                   file with clrsb added
 
 LIB2ADD = \
 	$(srcdir)/config/fructus/lib1funcs.S \
 	$(srcdir)/config/fructus/lib2div.c \
 	$(srcdir)/config/fructus/lib2mul.c \
-	$(srcdir)/config/msp430/lib2bitcountHI.c
+	$(srcdir)/config/fructus/lib2bitcountHI.c
 
 # libgcc2.c's own 64-bit shifts and divisions, which lib1funcs.S replaces.
 # Left in, both would define the same symbols in different members of

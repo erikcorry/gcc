@@ -41,7 +41,7 @@
    (SP_REGNUM  6)
    (LR_REGNUM  7)])
 
-(define_c_enum "unspec" [UNSPEC_CALLEE_CC UNSPEC_CLMUL UNSPEC_ZP])
+(define_c_enum "unspec" [UNSPEC_CALLEE_CC UNSPEC_CLMUL UNSPEC_ZP UNSPEC_SUBV])
 (define_c_enum "unspecv" [UNSPECV_BLOCKAGE])
 
 (define_attr "length" "" (const_int 2))
@@ -419,6 +419,24 @@
 	(popcount:HI (match_operand:HI 1 "register_operand" "r")))]
   ""
   "popcount\t%0, %1")
+;; The number of bits after the sign that repeat it: clz of the value, or
+;; of its complement if negative, less the sign itself.
+(define_expand "clrsbhi2"
+  [(match_operand:HI 0 "register_operand")
+   (match_operand:HI 1 "register_operand")]
+  ""
+{
+  rtx t = gen_reg_rtx (HImode);
+  rtx_code_label *pos = gen_label_rtx ();
+  emit_move_insn (t, operands[1]);
+  emit_cmp_and_jump_insns (operands[1], const0_rtx, GE, NULL_RTX, HImode, 0,
+			   pos);
+  emit_insn (gen_one_cmplhi2 (t, operands[1]));
+  emit_label (pos);
+  emit_insn (gen_clzhi2 (t, t));
+  emit_insn (gen_addhi3 (operands[0], t, constm1_rtx));
+  DONE;
+})
 ;; clmul multiplies the two bytes of one register without carries.  There
 ;; is no RTL code for a carry-less product, so it is an unspec, reached
 ;; through __builtin_fructus_clmul; the operands are packed by movhi below.
@@ -662,9 +680,83 @@
 	    (const_int 6))
 	  (const_int 6)))])
 
-;; brset and brclr: a masked test against zero.
 (define_code_iterator eqne [eq ne])
 
+;; Signed overflow: addv and subv, through fructus_expand_addsubv.
+(define_expand "addvhi4"
+  [(match_operand:HI 0 "register_operand")
+   (match_operand:HI 1 "register_operand")
+   (match_operand:HI 2 "nonmemory_operand")
+   (match_operand 3 "")]
+  ""
+{
+  fructus_expand_addsubv (operands, PLUS);
+  DONE;
+})
+
+(define_expand "subvhi4"
+  [(match_operand:HI 0 "register_operand")
+   (match_operand:HI 1 "nonmemory_operand")
+   (match_operand:HI 2 "nonmemory_operand")
+   (match_operand 3 "")]
+  ""
+{
+  fructus_expand_addsubv (operands, MINUS);
+  DONE;
+})
+
+;; -x overflows only for -32768, which is lt #-32767.
+(define_expand "negvhi3"
+  [(match_operand:HI 0 "register_operand")
+   (match_operand:HI 1 "register_operand")
+   (match_operand 2 "")]
+  ""
+{
+  rtx a = operands[1];
+  rtx t = gen_reg_rtx (HImode);
+  emit_insn (gen_neghi2 (t, a));
+  if (reg_overlap_mentioned_p (operands[0], a))
+    a = copy_to_reg (a);
+  emit_move_insn (operands[0], t);
+  emit_cmp_and_jump_insns (a, gen_int_mode (-32767, HImode), LT, NULL_RTX,
+			   HImode, 0, as_a <rtx_code_label *> (operands[2]));
+  DONE;
+})
+
+;; br vs and br vc: taken when %0 - %1 overflows, or does not.  The unspec
+;; is that overflow as a value, there being no RTL code for it.
+(define_expand "fructus_branch_vs"
+  [(set (pc)
+	(if_then_else (ne (unspec:HI [(match_operand:HI 0 "register_operand")
+				      (match_operand:HI 1 "register_operand")]
+				     UNSPEC_SUBV)
+			  (const_int 0))
+		      (label_ref (match_operand 2 ""))
+		      (pc)))]
+  "")
+
+(define_insn "*branch_v_<code>"
+  [(set (pc)
+	(if_then_else (eqne (unspec:HI [(match_operand:HI 0 "register_operand" "r")
+					(match_operand:HI 1 "register_operand" "r")]
+				       UNSPEC_SUBV)
+			    (const_int 0))
+		      (label_ref (match_operand 2 ""))
+		      (pc)))]
+  ""
+{
+  bool vs = <CODE> == NE;
+  if (get_attr_length (insn) == 3)
+    return vs ? "br\tvs, %0, %1, %l2" : "br\tvc, %0, %1, %l2";
+  return (vs ? "br\tvc, %0, %1, .Lb%=\n\tjmp\t%l2\n.Lb%=:"
+	  : "br\tvs, %0, %1, .Lb%=\n\tjmp\t%l2\n.Lb%=:");
+}
+  [(set (attr "length")
+	(if_then_else (and (ge (minus (match_dup 2) (pc)) (const_int -120))
+			   (le (minus (match_dup 2) (pc)) (const_int 120)))
+		      (const_int 3) (const_int 6)))])
+
+;; brset and brclr: a masked test against zero.
 (define_insn "*brmask_<code>"
   [(set (pc)
 	(if_then_else (eqne (and:HI (match_operand:HI 0 "register_operand" "r")

@@ -105,10 +105,18 @@
 #define PCC_BITFIELD_TYPE_MATTERS 0
 #define MAX_FIXED_MODE_SIZE 64
 
+/* clz of zero is 16; clrsbhi2 relies on it.  */
+#define CLZ_DEFINED_VALUE_AT_ZERO(MODE, VALUE) \
+  ((MODE) == HImode ? ((VALUE) = 16, 2) : 0)
+
 /* libgcc2 is built with 32-bit words, as msp430 does, so that the "double
    word" routines it provides are the 64-bit ones.  The 16- and 32-bit helpers
-   come from libgcc/config/fructus.  */
+   come from libgcc/config/fructus, and lib2bitcountHI.c there defines this
+   as 2 before it includes libgcc2.c, to get the 16-bit bit counts: hence
+   the #ifndef, without which this would quietly undo that.  */
+#ifndef LIBGCC2_UNITS_PER_WORD
 #define LIBGCC2_UNITS_PER_WORD 4
+#endif
 
 /* --------------------------------------------------------------------------
    Layout of source language data types

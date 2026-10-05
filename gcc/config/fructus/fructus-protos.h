@@ -61,6 +61,7 @@ extern void fructus_expand_mulsi3 (rtx *);
 extern void fructus_expand_umulsidi3 (rtx *);
 extern void fructus_split_double_move (rtx *, machine_mode);
 extern bool fructus_expand_sub (rtx *);
+extern void fructus_expand_addsubv (rtx *, enum rtx_code);
 extern void fructus_expand_cbranch (rtx *, machine_mode);
 extern void fructus_expand_call (rtx *, int);
 

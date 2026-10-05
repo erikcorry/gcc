@@ -603,6 +603,87 @@ fructus_expand_sub (rtx *operands)
   return false;
 }
 
+/* Branch to LABEL when A - B overflows: br vs.  */
+
+static void
+fructus_emit_branch_vs (rtx a, rtx b, rtx label)
+{
+  rtx_insn *jump = emit_jump_insn (gen_fructus_branch_vs (a, b, label));
+  JUMP_LABEL (jump) = label;
+  LABEL_NUSES (label)++;
+}
+
+/* addv and subv: %0 = %1 CODE %2, branching to %3 if that overflows.
+
+   br vs is taken when its first operand minus its second overflows, which
+   for a - b is the question as asked.  For a + b it is asked of the sum:
+   s - b is a when the sum fitted and a -/+ 65536 when it wrapped, so it
+   overflows exactly when a + b did.
+
+   Against a constant k the test is a plain comparison of the operand,
+   a + k overflowing exactly when a > 32767 - k (or a < -32768 - k for a
+   negative k), and condimm5 holds the four that x++, x += 2, x-- and x -= 2
+   produce.
+
+   The branch is emitted last, so that the expander's caller finds it and
+   marks it unlikely, and on copies of any operand the store of the result
+   would overwrite.  */
+
+void
+fructus_expand_addsubv (rtx *operands, enum rtx_code code)
+{
+  rtx dst = operands[0], a = operands[1], b = operands[2];
+  rtx label = operands[3];
+  rtx t = gen_reg_rtx (HImode);
+
+  if (!register_operand (a, HImode))
+    a = force_reg (HImode, a);
+
+  if (CONST_INT_P (b))
+    {
+      HOST_WIDE_INT k = INTVAL (b);
+      enum rtx_code cmp;
+      HOST_WIDE_INT lim;
+
+      rtx s = expand_simple_binop (HImode, code, a, b, t, 0, OPTAB_DIRECT);
+      if (s != t)
+	emit_move_insn (t, s);
+      if (reg_overlap_mentioned_p (dst, a))
+	a = copy_to_reg (a);
+      emit_move_insn (dst, t);
+      if (code == MINUS && k == -32768)
+	cmp = GE, lim = 0;
+      else
+	{
+	  if (code == MINUS)
+	    k = -k;
+	  if (k == 0)
+	    return;
+	  cmp = k > 0 ? GT : LT;
+	  lim = k > 0 ? 32767 - k : -32768 - k;
+	}
+      emit_cmp_and_jump_insns (a, gen_int_mode (lim, HImode), cmp, NULL_RTX,
+			       HImode, 0, as_a <rtx_code_label *> (label));
+      return;
+    }
+
+  if (!register_operand (b, HImode))
+    b = force_reg (HImode, b);
+  if (code == PLUS)
+    {
+      emit_insn (gen_addhi3 (t, a, b));
+      a = t;
+    }
+  else
+    emit_insn (gen_subhi3 (t, a, b));
+  if (reg_overlap_mentioned_p (dst, a))
+    a = copy_to_reg (a);
+  if (reg_overlap_mentioned_p (dst, b))
+    b = copy_to_reg (b);
+  emit_move_insn (dst, t);
+  fructus_emit_branch_vs (a, b, label);
+}
+
 void
 fructus_expand_cbranch (rtx *operands, machine_mode mode)
 {
