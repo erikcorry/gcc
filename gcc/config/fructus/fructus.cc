@@ -48,6 +48,7 @@
 #include "optabs.h"
 #include "optabs-libfuncs.h"
 #include "explow.h"
+#include "predict.h"
 #include "opts.h"
 #include "tm-constrs.h"
 #include "gimple.h"
@@ -1436,10 +1437,32 @@ TARGET_GNU_ATTRIBUTES (fructus_attribute_table,
    of its own before select_section is asked.  A named section bypasses both.
    By now the initializer is known, so .bss or not can be decided.  */
 
+/* A LIBCALL'S ABI IS ITS COOKIE'S, and not its decl's.  optabs-libfuncs.cc
+   gives every libfunc the decl of `int f ()', with no prototype, and under
+   -fipa-ra insn_callee_abi asks a call's decl before it asks
+   fructus_insn_callee_abi.  No prototype is the widest convention, so every
+   `a * b' and `a / b' made the function around it save r2 and r3 - ten
+   cycles of push and pop in a two-argument function, for registers that
+   __mulhi3 and __udivhi3 never touch.  Without the decl, the call is asked
+   by its UNSPEC_CALLEE_CC, which the libcall's own argument modes set.  */
+
+static bool
+fructus_libfunc_decl_p (tree decl)
+{
+  return (TREE_CODE (decl) == FUNCTION_DECL && DECL_ARTIFICIAL (decl)
+	  && DECL_EXTERNAL (decl)
+	  && DECL_SOURCE_LOCATION (decl) == UNKNOWN_LOCATION
+	  && !prototype_p (TREE_TYPE (decl)));
+}
+
 static void
 fructus_encode_section_info (tree decl, rtx rtl, int first)
 {
   default_encode_section_info (decl, rtl, first);
+
+  if (first && fructus_libfunc_decl_p (decl)
+      && MEM_P (rtl) && GET_CODE (XEXP (rtl, 0)) == SYMBOL_REF)
+    SET_SYMBOL_REF_DECL (XEXP (rtl, 0), NULL_TREE);
 
   if (!VAR_P (decl) || !MEM_P (rtl) || GET_CODE (XEXP (rtl, 0)) != SYMBOL_REF)
     return;
@@ -2127,6 +2150,49 @@ fructus_widened_byte_cost (rtx x, machine_mode mode, bool speed, int *total)
   return wide;
 }
 
+/* A product, as what it becomes.  For speed, cycles: mul is two, and the
+   rest are libgcc's helpers as tools/sim.js counts them, call and return
+   included, or the inline byte products of
+   fructus_expand_byte_products.  For size, the instructions at the call
+   site - a call and the moves into its argument registers.
+
+   SIZE IS NOT SPEED HERE, and pricing them alike cost bytes: at 40 for
+   both, -Os multiplied a long by 1000 with 33 instructions of shifts and
+   adds where a call is four.  */
+
+static int
+fructus_mult_cost (rtx x, machine_mode mode, bool speed)
+{
+  enum rtx_code c0 = GET_CODE (XEXP (x, 0)), c1 = GET_CODE (XEXP (x, 1));
+  bool widening = ((c0 == ZERO_EXTEND || c0 == SIGN_EXTEND)
+		   && (c1 == c0 || CONST_INT_P (XEXP (x, 1))));
+
+  if (mode == HImode)
+    {
+      if (TARGET_MUL)
+	return COSTS_N_INSNS (speed ? 2 : 1);
+      /* For size, five: a call clobbers r0, r1 and r5 and can cost the
+	 caller its lr, so x * 13 in four shifts and adds stays smaller -
+	 at three, tests/bench's matmul called __mulhi3 for it.  */
+      return COSTS_N_INSNS (speed ? 15 : 5);
+    }
+  if (mode == SImode && widening)
+    {
+      if (!speed)
+	return COSTS_N_INSNS (3);
+      return COSTS_N_INSNS (TARGET_MUL ? 24 : 150);
+    }
+  if (mode == SImode)
+    {
+      if (!speed)
+	return COSTS_N_INSNS (4);
+      return COSTS_N_INSNS (TARGET_MUL ? 60 : 320);
+    }
+  if (!speed)
+    return COSTS_N_INSNS (5);
+  return COSTS_N_INSNS (TARGET_MUL ? 300 : 1200);
+}
+
 static bool
 fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total,
 		   bool speed)
@@ -2168,15 +2234,26 @@ fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total,
       *total = COSTS_N_INSNS (2);
       return true;
     case MULT:
-      /* With -mmul a 16-bit product is one instruction, two cycles.
-	 Without it, or wider, it is a call into libgcc.  */
-      if (TARGET_MUL && mode == HImode)
-	*total = COSTS_N_INSNS (speed ? 2 : 1);
-      else
-	*total = COSTS_N_INSNS (GET_MODE_SIZE (mode) > 2 ? 40 : 15);
+      *total = fructus_mult_cost (x, mode, speed);
       return true;
+    case TRUNCATE:
+      /* The high half of a 16 x 16 product: four byte products inline,
+	 with mul - see fructus_expand_byte_products.  Without mul there is
+	 no umulhi3_highpart, and nothing asks.  */
+      if (mode == HImode && GET_CODE (XEXP (x, 0)) == LSHIFTRT
+	  && GET_CODE (XEXP (XEXP (x, 0), 0)) == MULT)
+	{
+	  *total = COSTS_N_INSNS (speed ? 22 : 17);
+	  return true;
+	}
+      return false;
     case DIV: case UDIV: case MOD: case UMOD:
-      *total = COSTS_N_INSNS (GET_MODE_SIZE (mode) > 2 ? 80 : 40);
+      /* Calls.  For size a call and its divisor's mov - which is what
+	 keeps a reciprocal's seventeen instructions out of -Os.  */
+      if (!speed)
+	*total = COSTS_N_INSNS (GET_MODE_SIZE (mode) > 2 ? 5 : 4);
+      else
+	*total = COSTS_N_INSNS (GET_MODE_SIZE (mode) > 2 ? 80 : 40);
       return true;
     default:
       return false;
@@ -2245,6 +2322,185 @@ fructus_expand_word_shift (rtx *operands, enum rtx_code code)
 }
 
 /* ==========================================================================
+   Products wider than mul
+
+   mul is the LOW half of a 16 x 16 product, and nothing else, so a 32-bit
+   product - or the high half alone, which is what dividing by a constant
+   wants - is four products of bytes, each of which fits in sixteen bits:
+
+	a*b = p11<<16 + (p01 + p10)<<8 + p00	p00 = a0*b0   p01 = a0*b1
+						p10 = a1*b0   p11 = a1*b1
+
+   NO CARRY IS EVER TESTED, which on a machine without flags would be a
+   compare and a branch apiece.  The low bytes of the cross products are
+   summed apart from their high bytes: three bytes come to at most 0x2fc,
+   so s cannot overflow, and its own top bits are the carry.
+
+	s  = (p00 >> 8) + (p01 & 255) + (p10 & 255)
+	lo = s:p00, a byte each				- movhi
+	hi = p11 + (p01 >> 8) + (p10 >> 8) + (s >> 8)
+
+   SIGNED IS THE SAME, with the high bytes of the operands and of the cross
+   products shifted arithmetically: a1*b0 is in -32640..32385 and a1*b1 in
+   -16256..16384, so every partial product is still exact in sixteen bits,
+   and there is no correction afterwards.  p00 and s are never negative.
+
+   s is formed without the two masks: the whole of p01 and p10 summed, less
+   h << 8, is exact modulo 2^16 and s is below it.  libgcc/lib1funcs.s's
+   __umulhisi3_mul is the same sequence by hand, for -Os.
+
+   B MAY BE A CONSTANT - a divisor's reciprocal - and its bytes are then
+   immediates, which mul's imm10 form carries.  LO may be null when only the
+   high half is wanted.  */
+
+static rtx
+fructus_byte_product (rtx x, rtx y)
+{
+  if (y == const0_rtx || x == const0_rtx)
+    return const0_rtx;
+  if (y == const1_rtx)
+    return x;
+  return expand_simple_binop (HImode, MULT, x, y, NULL_RTX, 1, OPTAB_DIRECT);
+}
+
+static void
+fructus_expand_byte_products (rtx lo, rtx hi, rtx a, rtx b, bool sign)
+{
+  enum rtx_code high_shift = sign ? ASHIFTRT : LSHIFTRT;
+  auto bin = [] (enum rtx_code code, rtx x, rtx y)
+    {
+      return expand_simple_binop (HImode, code, x, y, NULL_RTX, 1,
+				  OPTAB_DIRECT);
+    };
+  rtx eight = GEN_INT (8), mask = GEN_INT (255);
+
+  a = force_reg (HImode, a);
+  rtx a1 = bin (high_shift, a, eight);
+  rtx a0 = bin (AND, a, mask);
+  rtx b0, b1;
+  if (CONST_INT_P (b))
+    {
+      HOST_WIDE_INT v = INTVAL (b);
+      b0 = GEN_INT (v & 255);
+      b1 = gen_int_mode (sign ? (v << 48 >> 56) : ((v >> 8) & 255), HImode);
+    }
+  else
+    {
+      b = force_reg (HImode, b);
+      b1 = bin (high_shift, b, eight);
+      b0 = bin (AND, b, mask);
+    }
+
+  rtx p10 = fructus_byte_product (a1, b0);
+  rtx p11 = fructus_byte_product (a1, b1);
+  rtx p01 = fructus_byte_product (a0, b1);
+  rtx p00 = fructus_byte_product (a0, b0);
+
+  rtx sum = bin (PLUS, bin (PLUS, bin (LSHIFTRT, p00, eight), p01), p10);
+  rtx h = bin (PLUS, bin (high_shift, p01, eight), bin (high_shift, p10, eight));
+  rtx s = bin (MINUS, sum, bin (ASHIFT, h, eight));
+
+  if (lo)
+    emit_move_insn (lo, bin (IOR, bin (ASHIFT, s, eight),
+			      bin (AND, p00, mask)));
+  emit_move_insn (hi, bin (PLUS, bin (PLUS, p11, h),
+			    bin (LSHIFTRT, s, eight)));
+}
+
+/* A library routine of two 16-bit operands, as a const call.  */
+
+static rtx
+fructus_libcall2 (const char *name, rtx target, machine_mode mode,
+		  rtx a, rtx b, machine_mode op_mode)
+{
+  return emit_library_call_value (init_one_libfunc (name), target,
+				  LCT_CONST, mode, a, op_mode, b, op_mode);
+}
+
+/* umulhisi3 and mulhisi3: operands[0] = (SI) operands[1] * operands[2].
+   With mul and for speed, the byte products inline; with mul for size,
+   the same by hand in __umulhisi3_mul; without mul, shift and add in
+   __umulhisi3 - which before these expanders existed was reached only
+   through __mulsi3, after widening both operands to 32 bits, and for a
+   signed product never at all.  */
+
+void
+fructus_expand_widen_mult (rtx *operands, bool sign)
+{
+  if (TARGET_MUL && optimize_insn_for_speed_p ())
+    {
+      rtx lo = gen_reg_rtx (HImode), hi = gen_reg_rtx (HImode);
+      fructus_expand_byte_products (lo, hi, operands[1], operands[2], sign);
+      emit_move_insn (simplify_gen_subreg (HImode, operands[0], SImode, 0), lo);
+      emit_move_insn (simplify_gen_subreg (HImode, operands[0], SImode, 2), hi);
+      return;
+    }
+  const char *name = (sign ? (TARGET_MUL ? "__mulhisi3_mul" : "__mulhisi3")
+		      : (TARGET_MUL ? "__umulhisi3_mul" : "__umulhisi3"));
+  rtx v = fructus_libcall2 (name, operands[0], SImode,
+			    operands[1], operands[2], HImode);
+  if (v != operands[0])
+    emit_move_insn (operands[0], v);
+}
+
+/* umulhi3_highpart and smulhi3_highpart, only with mul: the high half of
+   the 32-bit product.  A constant operand - dividing by a constant, which
+   is what makes this worth having - is always inline, and fructus_rtx_costs
+   says how much that costs for size, so -Os keeps the division's libcall.
+   Two registers inline for speed, and the helper's high half for size.  */
+
+void
+fructus_expand_mult_highpart (rtx *operands, bool sign)
+{
+  if (CONST_INT_P (operands[2]) || optimize_insn_for_speed_p ())
+    {
+      fructus_expand_byte_products (NULL_RTX, operands[0], operands[1],
+				    operands[2], sign);
+      return;
+    }
+  rtx v = fructus_libcall2 (sign ? "__mulhisi3_mul" : "__umulhisi3_mul",
+			    NULL_RTX, SImode, operands[1],
+			    force_reg (HImode, operands[2]), HImode);
+  emit_move_insn (operands[0], simplify_gen_subreg (HImode, v, SImode, 2));
+}
+
+/* mulhi3 without mul: a call to __mulhi3.  */
+
+void
+fructus_expand_mulhi3_libcall (rtx *operands)
+{
+  rtx v = fructus_libcall2 ("__mulhi3", operands[0], HImode, operands[1],
+			    force_reg (HImode, operands[2]), HImode);
+  if (v != operands[0])
+    emit_move_insn (operands[0], v);
+}
+
+/* mulsi3: a call to __mulsi3, or __mulsi3_mul with mul.  */
+
+void
+fructus_expand_mulsi3 (rtx *operands)
+{
+  rtx v = fructus_libcall2 (TARGET_MUL ? "__mulsi3_mul" : "__mulsi3",
+			    operands[0], SImode, operands[1], operands[2],
+			    SImode);
+  if (v != operands[0])
+    emit_move_insn (operands[0], v);
+}
+
+/* umulsidi3: 32 x 32 -> 64, unsigned, which libgcc has by hand.  Without
+   this a 64-bit product of two 32-bit values was a full __muldi3.  */
+
+void
+fructus_expand_umulsidi3 (rtx *operands)
+{
+  rtx v = fructus_libcall2 (TARGET_MUL ? "__umulsidi3_mul" : "__umulsidi3",
+			    operands[0], DImode, operands[1], operands[2],
+			    SImode);
+  if (v != operands[0])
+    emit_move_insn (operands[0], v);
+}
+
+/* ==========================================================================
    Division
 
    libgcc's __udivmodhi4 returns BOTH results - the quotient in r0 and the
@@ -2261,6 +2517,15 @@ static void
 fructus_init_libfuncs (void)
 {
   set_optab_libfunc (udivmod_optab, HImode, "__udivmodhi4");
+
+  /* With mul, the wide products have helpers of their own, built from it.
+     libgcc is built without -mmul and runs on either kind of part, so these
+     are separate routines rather than the same names built twice - and
+     --gc-sections leaves out whichever a program does not call.  */
+  if (TARGET_MUL)
+    {
+      set_optab_libfunc (smul_optab, DImode, "__muldi3_mul");
+    }
 }
 
 static void

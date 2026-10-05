@@ -295,7 +295,25 @@
 ;; mul is the low half of the product, from the DSP, in two cycles; only
 ;; with -mmul, since a part without a multiplier has no mul.  The tied form
 ;; carries imm5 in two bytes, the untied one imm10 in three.
-(define_insn "mulhi3"
+;;
+;; WITHOUT mul THE EXPANDER CALLS __mulhi3 ITSELF, and it has to.  Were
+;; there no mulhi3 at all, expand_binop would try a wider mode's insn before
+;; the libcall - and umulhisi3 is one - so every int multiply became a
+;; 32-bit __umulhisi3, 70 cycles slower.
+(define_expand "mulhi3"
+  [(set (match_operand:HI 0 "register_operand")
+	(mult:HI (match_operand:HI 1 "register_operand")
+		 (match_operand:HI 2 "fructus_imm10_operand")))]
+  ""
+{
+  if (!TARGET_MUL)
+    {
+      fructus_expand_mulhi3_libcall (operands);
+      DONE;
+    }
+})
+
+(define_insn "*mulhi3"
   [(set (match_operand:HI 0 "register_operand" "=r,r,r")
 	(mult:HI (match_operand:HI 1 "register_operand" "%0,r,r")
 		 (match_operand:HI 2 "fructus_imm10_operand" "I,I,r")))]
@@ -310,6 +328,85 @@
 					&& fructus_imm5_p (INTVAL (operands[2])))")
 		      (const_int 3)
 		      (const_int 2)))])
+
+;; Products wider than mul's sixteen bits: byte products inline with -mmul
+;; for speed, and libgcc's helpers otherwise - see fructus.cc.  Declaring
+;; the widening ones is what lets a 16 x 16 -> 32 product reach
+;; __umulhisi3 and __mulhisi3 at all; without them GCC widened both
+;; operands and called __mulsi3.
+(define_expand "umulhisi3"
+  [(set (match_operand:SI 0 "register_operand")
+	(mult:SI (zero_extend:SI (match_operand:HI 1 "register_operand"))
+		 (zero_extend:SI (match_operand:HI 2 "register_operand"))))]
+  ""
+{
+  fructus_expand_widen_mult (operands, false);
+  DONE;
+})
+
+(define_expand "mulhisi3"
+  [(set (match_operand:SI 0 "register_operand")
+	(mult:SI (sign_extend:SI (match_operand:HI 1 "register_operand"))
+		 (sign_extend:SI (match_operand:HI 2 "register_operand"))))]
+  ""
+{
+  fructus_expand_widen_mult (operands, true);
+  DONE;
+})
+
+(define_expand "umulsidi3"
+  [(set (match_operand:DI 0 "register_operand")
+	(mult:DI (zero_extend:DI (match_operand:SI 1 "register_operand"))
+		 (zero_extend:DI (match_operand:SI 2 "register_operand"))))]
+  ""
+{
+  fructus_expand_umulsidi3 (operands);
+  DONE;
+})
+
+;; A 32 x 32 -> 32 product is a call, as it was before umulsidi3 existed -
+;; but it must be SAID to be one.  With only a libfunc for SImode,
+;; expand_binop tries a wider mode's insn before the libcall, found
+;; umulsidi3, and made every long multiply a 64-bit product.
+(define_expand "mulsi3"
+  [(set (match_operand:SI 0 "register_operand")
+	(mult:SI (match_operand:SI 1 "register_operand")
+		 (match_operand:SI 2 "register_operand")))]
+  ""
+{
+  fructus_expand_mulsi3 (operands);
+  DONE;
+})
+
+;; The high half alone, which is how GCC divides by a constant: by its
+;; reciprocal.  Only with mul, which makes it four byte products; the
+;; shift-and-add equivalent would be wider than a word, which expmed.cc
+;; does not attempt.
+(define_expand "umulhi3_highpart"
+  [(set (match_operand:HI 0 "register_operand")
+	(truncate:HI
+	  (lshiftrt:SI
+	    (mult:SI (zero_extend:SI (match_operand:HI 1 "register_operand"))
+		     (zero_extend:SI (match_operand:HI 2 "nonmemory_operand")))
+	    (const_int 16))))]
+  "TARGET_MUL"
+{
+  fructus_expand_mult_highpart (operands, false);
+  DONE;
+})
+
+(define_expand "smulhi3_highpart"
+  [(set (match_operand:HI 0 "register_operand")
+	(truncate:HI
+	  (lshiftrt:SI
+	    (mult:SI (sign_extend:SI (match_operand:HI 1 "register_operand"))
+		     (sign_extend:SI (match_operand:HI 2 "nonmemory_operand")))
+	    (const_int 16))))]
+  "TARGET_MUL"
+{
+  fructus_expand_mult_highpart (operands, true);
+  DONE;
+})
 
 (define_insn "clzhi2"
   [(set (match_operand:HI 0 "register_operand" "=r")
