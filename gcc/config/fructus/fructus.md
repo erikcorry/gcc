@@ -838,7 +838,8 @@
 
 ;; -------------------------------------------------------------------------
 ;; Calls.  Each carries its callee's ABI id, from the end-marker cookie,
-;; for fructus_insn_callee_abi to read back.
+;; for fructus_insn_callee_abi to read back.  A target in a register is in
+;; any but lr ("c"): `call lr' would go to the new lr, the next instruction.
 ;; -------------------------------------------------------------------------
 
 (define_expand "call"
@@ -853,7 +854,7 @@
 })
 
 (define_insn "*call"
-  [(call (mem:QI (match_operand:HI 0 "fructus_call_operand" "i,r"))
+  [(call (mem:QI (match_operand:HI 0 "fructus_call_operand" "i,c"))
 	 (match_operand 1 "" ""))
    (use (unspec:HI [(match_operand 2 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]
@@ -875,7 +876,7 @@
 
 (define_insn "*call_value"
   [(set (match_operand 0 "" "")
-	(call (mem:QI (match_operand:HI 1 "fructus_call_operand" "i,r"))
+	(call (mem:QI (match_operand:HI 1 "fructus_call_operand" "i,c"))
 	      (match_operand 2 "" "")))
    (use (unspec:HI [(match_operand 3 "const_int_operand" "")]
 		   UNSPEC_CALLEE_CC))]

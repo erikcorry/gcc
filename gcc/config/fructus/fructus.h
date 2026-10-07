@@ -194,9 +194,15 @@
   { FRUCTUS_R0, FRUCTUS_R1, FRUCTUS_R5, FRUCTUS_R2, FRUCTUS_R3, \
     FRUCTUS_R4, FRUCTUS_LR, FRUCTUS_SP, FRUCTUS_SFP, FRUCTUS_SAP }
 
+/* CALL_TARGET_REGS is every register but lr, for the target of `call ra':
+   the call writes lr before it jumps, so `call lr' goes to the instruction
+   after it.  Only the call patterns ask for it, and REGNO_REG_CLASS still
+   answers GENERAL_REGS, as arm's does for its call classes, so that no other
+   allocation changes.  */
 enum reg_class
 {
   NO_REGS,
+  CALL_TARGET_REGS,
   GENERAL_REGS,
   ALL_REGS,
   LIM_REG_CLASSES
@@ -204,10 +210,12 @@ enum reg_class
 
 #define N_REG_CLASSES LIM_REG_CLASSES
 
-#define REG_CLASS_NAMES { "NO_REGS", "GENERAL_REGS", "ALL_REGS" }
+#define REG_CLASS_NAMES \
+  { "NO_REGS", "CALL_TARGET_REGS", "GENERAL_REGS", "ALL_REGS" }
 
 #define REG_CLASS_CONTENTS \
 { { 0x000 },			\
+  { 0x37f },			\
   { 0x3ff },			\
   { 0x3ff } }
 

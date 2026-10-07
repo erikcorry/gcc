@@ -21,6 +21,11 @@
 ;; carry the value; gas then chooses which.  The tables live in fructus-isa.h,
 ;; generated from isa/fructus.toml.
 
+;; The target of `call ra': any register but lr, which the call writes
+;; before it jumps.
+(define_register_constraint "c" "CALL_TARGET_REGS"
+  "A register to call through: any but lr.")
+
 (define_constraint "I"
   "A signed 10-bit constant: every two-register immediate form reaches it."
   (and (match_code "const_int")
