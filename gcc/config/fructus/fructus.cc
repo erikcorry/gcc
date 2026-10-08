@@ -2267,11 +2267,11 @@ fructus_widened_byte_cost (rtx x, machine_mode mode, bool speed, int *total)
   return wide;
 }
 
-/* A product, as what it becomes.  For speed, cycles: mul is two, and the
-   rest are libgcc's helpers as tools/sim.js counts them, call and return
-   included, or the inline byte products of
-   fructus_expand_byte_products.  For size, the instructions at the call
-   site - a call and the moves into its argument registers.
+/* A product, as what it becomes.  For speed, cycles: mul, mulhu and
+   mulhs are two each, and the rest are libgcc's helpers as tools/sim.js
+   counts them, call and return included, or what fructus_expand_mulsi3
+   puts inline.  For size, the instructions at the call site - a call and
+   the moves into its argument registers - or the inline ones.
 
    SIZE IS NOT SPEED HERE, and pricing them alike cost bytes: at 40 for
    both, -Os multiplied a long by 1000 with 33 instructions of shifts and
@@ -2295,19 +2295,21 @@ fructus_mult_cost (rtx x, machine_mode mode, bool speed)
     }
   if (mode == SImode && widening)
     {
-      if (!speed)
-	return COSTS_N_INSNS (3);
-      return COSTS_N_INSNS (TARGET_MUL ? 24 : 150);
+      if (TARGET_MUL)
+	return COSTS_N_INSNS (speed ? 4 : 2);
+      return COSTS_N_INSNS (speed ? 150 : 3);
     }
   if (mode == SImode)
     {
       if (!speed)
 	return COSTS_N_INSNS (4);
-      return COSTS_N_INSNS (TARGET_MUL ? 60 : 320);
+      return COSTS_N_INSNS (TARGET_MUL ? 10 : 320);
     }
   if (!speed)
     return COSTS_N_INSNS (5);
-  return COSTS_N_INSNS (TARGET_MUL ? 300 : 1200);
+  if (TARGET_MUL)
+    return COSTS_N_INSNS (widening ? 50 : 110);
+  return COSTS_N_INSNS (1200);
 }
 
 static bool
@@ -2354,13 +2356,12 @@ fructus_rtx_costs (rtx x, machine_mode mode, int, int, int *total,
       *total = fructus_mult_cost (x, mode, speed);
       return true;
     case TRUNCATE:
-      /* The high half of a 16 x 16 product: four byte products inline,
-	 with mul - see fructus_expand_byte_products.  Without mul there is
-	 no umulhi3_highpart, and nothing asks.  */
+      /* The high half of a 16 x 16 product: mulhu or mulhs, two cycles.
+	 Without mul there is no umulhi3_highpart, and nothing asks.  */
       if (mode == HImode && GET_CODE (XEXP (x, 0)) == LSHIFTRT
 	  && GET_CODE (XEXP (XEXP (x, 0), 0)) == MULT)
 	{
-	  *total = COSTS_N_INSNS (speed ? 22 : 17);
+	  *total = COSTS_N_INSNS (speed ? 2 : 1);
 	  return true;
 	}
       return false;
@@ -2441,90 +2442,13 @@ fructus_expand_word_shift (rtx *operands, enum rtx_code code)
 /* ==========================================================================
    Products wider than mul
 
-   mul is the LOW half of a 16 x 16 product, and nothing else, so a 32-bit
-   product - or the high half alone, which is what dividing by a constant
-   wants - is four products of bytes, each of which fits in sixteen bits:
+   With -mmul a 16 x 16 -> 32 product is two instructions, mul for the low
+   half and mulhu or mulhs for the high, and every wider product is built
+   from those: no carry is tested short of 64 bits.  Without it, libgcc's
+   shift-and-add routines.
+   ========================================================================== */
 
-	a*b = p11<<16 + (p01 + p10)<<8 + p00	p00 = a0*b0   p01 = a0*b1
-						p10 = a1*b0   p11 = a1*b1
-
-   NO CARRY IS EVER TESTED, which on a machine without flags would be a
-   compare and a branch apiece.  The low bytes of the cross products are
-   summed apart from their high bytes: three bytes come to at most 0x2fc,
-   so s cannot overflow, and its own top bits are the carry.
-
-	s  = (p00 >> 8) + (p01 & 255) + (p10 & 255)
-	lo = s:p00, a byte each				- movhi
-	hi = p11 + (p01 >> 8) + (p10 >> 8) + (s >> 8)
-
-   SIGNED IS THE SAME, with the high bytes of the operands and of the cross
-   products shifted arithmetically: a1*b0 is in -32640..32385 and a1*b1 in
-   -16256..16384, so every partial product is still exact in sixteen bits,
-   and there is no correction afterwards.  p00 and s are never negative.
-
-   s is formed without the two masks: the whole of p01 and p10 summed, less
-   h << 8, is exact modulo 2^16 and s is below it.  libgcc/lib1funcs.s's
-   __umulhisi3_mul is the same sequence by hand, for -Os.
-
-   B MAY BE A CONSTANT - a divisor's reciprocal - and its bytes are then
-   immediates, which mul's imm10 form carries.  LO may be null when only the
-   high half is wanted.  */
-
-static rtx
-fructus_byte_product (rtx x, rtx y)
-{
-  if (y == const0_rtx || x == const0_rtx)
-    return const0_rtx;
-  if (y == const1_rtx)
-    return x;
-  return expand_simple_binop (HImode, MULT, x, y, NULL_RTX, 1, OPTAB_DIRECT);
-}
-
-static void
-fructus_expand_byte_products (rtx lo, rtx hi, rtx a, rtx b, bool sign)
-{
-  enum rtx_code high_shift = sign ? ASHIFTRT : LSHIFTRT;
-  auto bin = [] (enum rtx_code code, rtx x, rtx y)
-    {
-      return expand_simple_binop (HImode, code, x, y, NULL_RTX, 1,
-				  OPTAB_DIRECT);
-    };
-  rtx eight = GEN_INT (8), mask = GEN_INT (255);
-
-  a = force_reg (HImode, a);
-  rtx a1 = bin (high_shift, a, eight);
-  rtx a0 = bin (AND, a, mask);
-  rtx b0, b1;
-  if (CONST_INT_P (b))
-    {
-      HOST_WIDE_INT v = INTVAL (b);
-      b0 = GEN_INT (v & 255);
-      b1 = gen_int_mode (sign ? (v << 48 >> 56) : ((v >> 8) & 255), HImode);
-    }
-  else
-    {
-      b = force_reg (HImode, b);
-      b1 = bin (high_shift, b, eight);
-      b0 = bin (AND, b, mask);
-    }
-
-  rtx p10 = fructus_byte_product (a1, b0);
-  rtx p11 = fructus_byte_product (a1, b1);
-  rtx p01 = fructus_byte_product (a0, b1);
-  rtx p00 = fructus_byte_product (a0, b0);
-
-  rtx sum = bin (PLUS, bin (PLUS, bin (LSHIFTRT, p00, eight), p01), p10);
-  rtx h = bin (PLUS, bin (high_shift, p01, eight), bin (high_shift, p10, eight));
-  rtx s = bin (MINUS, sum, bin (ASHIFT, h, eight));
-
-  if (lo)
-    emit_move_insn (lo, bin (IOR, bin (ASHIFT, s, eight),
-			      bin (AND, p00, mask)));
-  emit_move_insn (hi, bin (PLUS, bin (PLUS, p11, h),
-			    bin (LSHIFTRT, s, eight)));
-}
-
-/* A library routine of two 16-bit operands, as a const call.  */
+/* A library routine of two operands, as a const call.  */
 
 static rtx
 fructus_libcall2 (const char *name, rtx target, machine_mode mode,
@@ -2534,9 +2458,24 @@ fructus_libcall2 (const char *name, rtx target, machine_mode mode,
 				  LCT_CONST, mode, a, op_mode, b, op_mode);
 }
 
+/* The two halves of a 16 x 16 product into LO and HI, either of which may
+   be null.  */
+
+static void
+fructus_emit_halves (rtx lo, rtx hi, rtx a, rtx b, bool sign)
+{
+  a = force_reg (HImode, a);
+  b = force_reg (HImode, b);
+  if (lo)
+    emit_insn (gen_mulhi3 (lo, a, b));
+  if (hi)
+    emit_insn (sign ? gen_smulhi3_highpart (hi, a, b)
+		    : gen_umulhi3_highpart (hi, a, b));
+}
+
 /* umulhisi3 and mulhisi3: operands[0] = (SI) operands[1] * operands[2].
-   With mul and for speed, the byte products inline; with mul for size,
-   the same by hand in __umulhisi3_mul; without mul, shift and add in
+   With mul, its two halves, at -Os as well: four bytes and four cycles,
+   where a call alone is three bytes.  Without mul, shift and add in
    __umulhisi3 - which before these expanders existed was reached only
    through __mulsi3, after widening both operands to 32 bits, and for a
    signed product never at all.  */
@@ -2544,41 +2483,19 @@ fructus_libcall2 (const char *name, rtx target, machine_mode mode,
 void
 fructus_expand_widen_mult (rtx *operands, bool sign)
 {
-  if (TARGET_MUL && optimize_insn_for_speed_p ())
+  if (TARGET_MUL)
     {
       rtx lo = gen_reg_rtx (HImode), hi = gen_reg_rtx (HImode);
-      fructus_expand_byte_products (lo, hi, operands[1], operands[2], sign);
+      fructus_emit_halves (lo, hi, operands[1], operands[2], sign);
       emit_move_insn (simplify_gen_subreg (HImode, operands[0], SImode, 0), lo);
       emit_move_insn (simplify_gen_subreg (HImode, operands[0], SImode, 2), hi);
       return;
     }
-  const char *name = (sign ? (TARGET_MUL ? "__mulhisi3_mul" : "__mulhisi3")
-		      : (TARGET_MUL ? "__umulhisi3_mul" : "__umulhisi3"));
-  rtx v = fructus_libcall2 (name, operands[0], SImode,
-			    operands[1], operands[2], HImode);
+  rtx v = fructus_libcall2 (sign ? "__mulhisi3" : "__umulhisi3",
+			    operands[0], SImode, operands[1], operands[2],
+			    HImode);
   if (v != operands[0])
     emit_move_insn (operands[0], v);
-}
-
-/* umulhi3_highpart and smulhi3_highpart, only with mul: the high half of
-   the 32-bit product.  A constant operand - dividing by a constant, which
-   is what makes this worth having - is always inline, and fructus_rtx_costs
-   says how much that costs for size, so -Os keeps the division's libcall.
-   Two registers inline for speed, and the helper's high half for size.  */
-
-void
-fructus_expand_mult_highpart (rtx *operands, bool sign)
-{
-  if (CONST_INT_P (operands[2]) || optimize_insn_for_speed_p ())
-    {
-      fructus_expand_byte_products (NULL_RTX, operands[0], operands[1],
-				    operands[2], sign);
-      return;
-    }
-  rtx v = fructus_libcall2 (sign ? "__mulhisi3_mul" : "__umulhisi3_mul",
-			    NULL_RTX, SImode, operands[1],
-			    force_reg (HImode, operands[2]), HImode);
-  emit_move_insn (operands[0], simplify_gen_subreg (HImode, v, SImode, 2));
 }
 
 /* mulhi3 without mul: a call to __mulhi3.  */
@@ -2592,11 +2509,39 @@ fructus_expand_mulhi3_libcall (rtx *operands)
     emit_move_insn (operands[0], v);
 }
 
-/* mulsi3: a call to __mulsi3, or __mulsi3_mul with mul.  */
+/* mulsi3: with mul and for speed, the product inline -
+
+	(ah:al) * (bh:bl) = al*bl + ((al*bh + ah*bl) << 16)
+
+   which is al*bl's two halves and the cross terms' low halves, four
+   products and two adds.  For size, or without mul, a call to
+   __mulsi3_mul or __mulsi3: the call and its moves are smaller.  */
 
 void
 fructus_expand_mulsi3 (rtx *operands)
 {
+  if (TARGET_MUL && optimize_insn_for_speed_p ())
+    {
+      auto half = [] (rtx x, int byte)
+	{
+	  return force_reg (HImode, simplify_gen_subreg (HImode, x, SImode,
+							 byte));
+	};
+      rtx al = half (operands[1], 0), ah = half (operands[1], 2);
+      rtx bl = half (operands[2], 0), bh = half (operands[2], 2);
+      rtx lo = gen_reg_rtx (HImode), c = gen_reg_rtx (HImode);
+      rtx x = gen_reg_rtx (HImode), y = gen_reg_rtx (HImode);
+      fructus_emit_halves (lo, c, al, bl, false);
+      emit_insn (gen_mulhi3 (x, al, bh));
+      emit_insn (gen_mulhi3 (y, ah, bl));
+      rtx hi = expand_simple_binop (HImode, PLUS, x, y, NULL_RTX, 1,
+				    OPTAB_DIRECT);
+      hi = expand_simple_binop (HImode, PLUS, hi, c, NULL_RTX, 1,
+				OPTAB_DIRECT);
+      emit_move_insn (simplify_gen_subreg (HImode, operands[0], SImode, 0), lo);
+      emit_move_insn (simplify_gen_subreg (HImode, operands[0], SImode, 2), hi);
+      return;
+    }
   rtx v = fructus_libcall2 (TARGET_MUL ? "__mulsi3_mul" : "__mulsi3",
 			    operands[0], SImode, operands[1], operands[2],
 			    SImode);

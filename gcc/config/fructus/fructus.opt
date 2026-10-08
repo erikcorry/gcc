@@ -19,11 +19,12 @@
 ; <http://www.gnu.org/licenses/>.
 
 ; `mul' is the low half of a 16x16 product from a hardware multiplier - the
-; iCE40 UP5K's DSP.  A part without one has no `mul', so it is off unless
-; asked for, and libgcc, built without it, runs on either.
+; iCE40 UP5K's DSPs - and `mulhu' and `mulhs' the high half.  A part without
+; one has none of them, so it is off unless asked for, and libgcc, built
+; without it, runs on either.
 mmul
 Target Mask(MUL)
-Use the mul instruction, which needs a hardware multiplier.
+Use the mul, mulhu and mulhs instructions, which need a hardware multiplier.
 
 ; How a function reaches zero page data - variables with the zp attribute.
 ; See `The zero page' in fructus.cc.

@@ -55,7 +55,6 @@ extern int fructus_iseq_length (rtx *, bool);
 extern bool fructus_expand_move (rtx *, machine_mode);
 extern bool fructus_expand_word_shift (rtx *, enum rtx_code);
 extern void fructus_expand_widen_mult (rtx *, bool);
-extern void fructus_expand_mult_highpart (rtx *, bool);
 extern void fructus_expand_mulhi3_libcall (rtx *);
 extern void fructus_expand_mulsi3 (rtx *);
 extern void fructus_expand_umulsidi3 (rtx *);

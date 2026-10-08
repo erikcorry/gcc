@@ -329,11 +329,11 @@
 		      (const_int 3)
 		      (const_int 2)))])
 
-;; Products wider than mul's sixteen bits: byte products inline with -mmul
-;; for speed, and libgcc's helpers otherwise - see fructus.cc.  Declaring
-;; the widening ones is what lets a 16 x 16 -> 32 product reach
-;; __umulhisi3 and __mulhisi3 at all; without them GCC widened both
-;; operands and called __mulsi3.
+;; Products wider than mul's sixteen bits.  With mul, a 16 x 16 -> 32 is
+;; mul and mulhu or mulhs, inline at every level; without it, libgcc's shift
+;; and add.  Declaring the widening ones is what lets a 16 x 16 -> 32
+;; product reach __umulhisi3 and __mulhisi3 at all; without them GCC widened
+;; both operands and called __mulsi3.
 (define_expand "umulhisi3"
   [(set (match_operand:SI 0 "register_operand")
 	(mult:SI (zero_extend:SI (match_operand:HI 1 "register_operand"))
@@ -364,10 +364,11 @@
   DONE;
 })
 
-;; A 32 x 32 -> 32 product is a call, as it was before umulsidi3 existed -
-;; but it must be SAID to be one.  With only a libfunc for SImode,
-;; expand_binop tries a wider mode's insn before the libcall, found
-;; umulsidi3, and made every long multiply a 64-bit product.
+;; A 32 x 32 -> 32 product.  With mul and for speed, three muls and a mulhu
+;; inline; otherwise a call, as it was before umulsidi3 existed - but it
+;; must be SAID to be one.  With only a libfunc for SImode, expand_binop
+;; tries a wider mode's insn before the libcall, found umulsidi3, and made
+;; every long multiply a 64-bit product.
 (define_expand "mulsi3"
   [(set (match_operand:SI 0 "register_operand")
 	(mult:SI (match_operand:SI 1 "register_operand")
@@ -378,35 +379,29 @@
   DONE;
 })
 
-;; The high half alone, which is how GCC divides by a constant: by its
-;; reciprocal.  Only with mul, which makes it four byte products; the
-;; shift-and-add equivalent would be wider than a word, which expmed.cc
-;; does not attempt.
-(define_expand "umulhi3_highpart"
-  [(set (match_operand:HI 0 "register_operand")
+;; The high half alone: mulhu and mulhs, which -mmul brings with mul - the
+;; same two cycles from the same DSPs.  This is also how GCC divides by a
+;; constant, by its reciprocal; the reciprocal is a register, since neither
+;; has an immediate form.
+(define_insn "umulhi3_highpart"
+  [(set (match_operand:HI 0 "register_operand" "=r")
 	(truncate:HI
 	  (lshiftrt:SI
-	    (mult:SI (zero_extend:SI (match_operand:HI 1 "register_operand"))
-		     (zero_extend:SI (match_operand:HI 2 "nonmemory_operand")))
+	    (mult:SI (zero_extend:SI (match_operand:HI 1 "register_operand" "r"))
+		     (zero_extend:SI (match_operand:HI 2 "register_operand" "r")))
 	    (const_int 16))))]
   "TARGET_MUL"
-{
-  fructus_expand_mult_highpart (operands, false);
-  DONE;
-})
+  "mulhu\t%0, %1, %2")
 
-(define_expand "smulhi3_highpart"
-  [(set (match_operand:HI 0 "register_operand")
+(define_insn "smulhi3_highpart"
+  [(set (match_operand:HI 0 "register_operand" "=r")
 	(truncate:HI
 	  (lshiftrt:SI
-	    (mult:SI (sign_extend:SI (match_operand:HI 1 "register_operand"))
-		     (sign_extend:SI (match_operand:HI 2 "nonmemory_operand")))
+	    (mult:SI (sign_extend:SI (match_operand:HI 1 "register_operand" "r"))
+		     (sign_extend:SI (match_operand:HI 2 "register_operand" "r")))
 	    (const_int 16))))]
   "TARGET_MUL"
-{
-  fructus_expand_mult_highpart (operands, true);
-  DONE;
-})
+  "mulhs\t%0, %1, %2")
 
 (define_insn "clzhi2"
   [(set (match_operand:HI 0 "register_operand" "=r")
