@@ -2573,12 +2573,44 @@ fructus_expand_umulsidi3 (rtx *operands)
 
    Only the unsigned one: there is no hand-written signed __divmodhi4, and
    without a libfunc the pass leaves signed division alone.
+
+   With -mmul every division has a routine of its own, built on recip: the
+   `_mul' names below.  As for the products, they are separate routines and
+   not the same names built twice, because libgcc is built once, without
+   -mmul, and has to run on a part with no multiplier.  32 bits gains a
+   udivmod libfunc too, __udivmodsi4_mul, which returns the quotient in r0:r1
+   and the remainder in r2:r3 - one 64-bit value under isa/abi.s, exactly as
+   __udivmodhi4's pair is one 32-bit value.  Without -mmul the 32-bit
+   routines are libgcc's C, which returns the remainder through a pointer,
+   and has no such libfunc.
    ========================================================================== */
 
 static void
 fructus_init_libfuncs (void)
 {
-  set_optab_libfunc (udivmod_optab, HImode, "__udivmodhi4");
+  if (TARGET_MUL)
+    {
+      set_optab_libfunc (udivmod_optab, HImode, "__udivmodhi4_mul");
+      set_optab_libfunc (udiv_optab, HImode, "__udivhi3_mul");
+      set_optab_libfunc (umod_optab, HImode, "__umodhi3_mul");
+      set_optab_libfunc (sdiv_optab, HImode, "__divhi3_mul");
+      set_optab_libfunc (smod_optab, HImode, "__modhi3_mul");
+
+      set_optab_libfunc (udivmod_optab, SImode, "__udivmodsi4_mul");
+      set_optab_libfunc (udiv_optab, SImode, "__udivsi3_mul");
+      set_optab_libfunc (umod_optab, SImode, "__umodsi3_mul");
+      set_optab_libfunc (sdiv_optab, SImode, "__divsi3_mul");
+      set_optab_libfunc (smod_optab, SImode, "__modsi3_mul");
+
+      set_optab_libfunc (udiv_optab, DImode, "__udivdi3_mul");
+      set_optab_libfunc (umod_optab, DImode, "__umoddi3_mul");
+      set_optab_libfunc (sdiv_optab, DImode, "__divdi3_mul");
+      set_optab_libfunc (smod_optab, DImode, "__moddi3_mul");
+    }
+  else
+    {
+      set_optab_libfunc (udivmod_optab, HImode, "__udivmodhi4");
+    }
 
   /* With mul, the wide products have helpers of their own, built from it.
      libgcc is built without -mmul and runs on either kind of part, so these
@@ -2590,18 +2622,21 @@ fructus_init_libfuncs (void)
     }
 }
 
+/* The pair comes back as one value twice the width: the quotient in its low
+   half and the remainder in its high.  */
+
 static void
 fructus_expand_divmod_libfunc (rtx libfunc, machine_mode mode, rtx op0,
 			       rtx op1, rtx *quot, rtx *rem)
 {
-  gcc_assert (mode == HImode);
+  gcc_assert (mode == HImode || mode == SImode);
+  machine_mode pair_mode = mode == HImode ? SImode : DImode;
 
-  rtx pair = emit_library_call_value (libfunc, NULL_RTX, LCT_CONST, SImode,
+  rtx pair = emit_library_call_value (libfunc, NULL_RTX, LCT_CONST, pair_mode,
 				      op0, mode, op1, mode);
 
-  /* The quotient is in r0, the low word, and the remainder in r1.  */
-  *quot = simplify_gen_subreg (mode, pair, SImode, 0);
-  *rem = simplify_gen_subreg (mode, pair, SImode, GET_MODE_SIZE (mode));
+  *quot = simplify_gen_subreg (mode, pair, pair_mode, 0);
+  *rem = simplify_gen_subreg (mode, pair, pair_mode, GET_MODE_SIZE (mode));
 
   gcc_assert (*quot && *rem);
 }
