@@ -1194,14 +1194,17 @@ __modsi3_mul:
 ; ----------------------------------------------------------------------------
 ; MEASURED, a full 64-bit dividend, mean cycles of __udivdi3
 ; ----------------------------------------------------------------------------
-;       divisor bits        1-16    17-32    33-48    49-64
-;       here                1150    2700-3100 1600-2000 700-980
-;       libgcc2.c's         ~4100   ~3000    ~3300    1600-2600
+;       divisor bits        1-16       17-32      33-48      49-64
+;       here                1140-1200  2740-3120  1590-2010  690-990
+;       -mmul, below        260-270    345-350    600-605    405-410
+;       libgcc2.c's         ~4100      ~3000      ~3300      1600-2600
 ;
-; 597 bytes for all six, where libgcc2.c's were 2.3K to 3.2K EACH, before the
-; 32-bit division, multiply and clz table they called.  A divisor of 17 to 32
-; bits is the slow case: 48 steps of the general loop, and a loop of its own
-; with R in two registers would be about 80 bytes more.
+; The range is over the widths in each column, 30 dividends a width.  561
+; bytes for all six, and 993 for the six with recip below, where libgcc2.c's
+; were 2.3K to 3.2K EACH, before the 32-bit division, multiply and clz table
+; they called.  A divisor of 17 to 32 bits is the slow case: 48 steps of the
+; general loop, and a loop of its own with R in two registers would be about
+; 80 bytes more.
 
 	.section	.text.__udivmoddi4,"ax"
 	.globl	__udivmoddi4
@@ -1407,10 +1410,8 @@ __udivmoddi4:
         br      eq, lr, #0, .wend       ; 3+1 the loop is longer than a
         jmp     .word                   ; 3   branch reaches
 .wend:
-        ld      r5, [sp, #18]           ; 4   p: R is the remainder
-        mov     lr, r1                  ; 1   stm stores through r1, so r1's
-        mov     r1, r5                  ; 1   own word goes from lr
-        stm     r0, lr, r2              ; 7
+        ld      r5, [sp, #18]           ; 4   p: R is the remainder, stored
+        stm     r0, r1, r2              ; 7   through it
         stm     r3                      ; 5
         pop     r0, r0, r1              ; 6   and the quotient, popped: T goes
         pop     r2, r3                  ; 5   into r0 and is overwritten
@@ -1437,10 +1438,10 @@ __umoddi3:
         push    lr                      ; 5
         call    __udivmoddi4.core       ; 3
         pop     lr                      ; 4
-        mov     r2, sp                  ; 1   ldm loads through r2, so its
-        ldm     r0, r1                  ; 5   own word goes to r5 first:
-        ldm     r5, r3                  ; 5   r5 is free at the return
-        mov     r2, r5                  ; 1
+        mov     r1, sp                  ; 1   ldm loads through r1, so its
+        ldm     r0, r5                  ; 5   own word goes to r5 first:
+        ldm     r2, r3                  ; 5   r5 is free at the return
+        mov     r1, r5                  ; 1
         ret                             ; 4
 
 ; ============================================================================
@@ -1490,28 +1491,26 @@ __divmoddi4:
 .npos:
         push    r3, r2, r1              ; 7   |n|, while d is fetched
         push    r0                      ; 5
-        ld      r0, [r5, #0]            ; 4
-        ld      r1, [r5, #2]            ; 4
-        ld      r2, [r5, #4]            ; 4
-        ld      r3, [r5, #6]            ; 4
+        mov     r1, r5                  ; 1   d, through ldm's r1, whose own
+        ldm     r0, lr, r2              ; 6   word goes by lr: free here
+        ldm     r3                      ; 4
+        mov     r1, lr                  ; 1
         brclr   r3, #0x8000, .dpos      ; 3+1
         call    .neg                    ; 3   |d|
 .dpos:
         push    r3, r2, r1              ; 7   |d| below |n|, where the core
         push    r0                      ; 5   can have it
-        ld      r0, [sp, #8]            ; 4
-        ld      r1, [sp, #10]           ; 4
-        ld      r2, [sp, #12]           ; 4
-        ld      r3, [sp, #14]           ; 4
+        add     r1, sp, #8              ; 1   |n| back, the same way
+        ldm     r0, lr, r2              ; 6
+        ldm     r3                      ; 4
+        mov     r1, lr                  ; 1
         mov     r5, sp                  ; 1
         call    __udivmoddi4.core       ; 3
         brclr   r4, #0x4000, .qpos      ; 3+1
         call    .neg                    ; 3
 .qpos:
-        mov     lr, r1                  ; 1   the quotient over |n|: stm
-        add     r1, sp, #8              ; 1   stores through r1, so r1's own
-                                        ;     word goes from lr
-        stm     r0, lr, r2              ; 7
+        add     r5, sp, #8              ; 1   the quotient over |n|
+        stm     r0, r1, r2              ; 7
         stm     r3                      ; 5
         pop     r0, r1, r2              ; 6   and the remainder popped out of
         pop     r3                      ; 4   |d|'s slots
@@ -1519,9 +1518,7 @@ __divmoddi4:
         call    .neg                    ; 3
 .rpos:
         ld      r5, [sp, #8]            ; 4   p
-        mov     lr, r1                  ; 1
-        mov     r1, r5                  ; 1
-        stm     r0, lr, r2              ; 7
+        stm     r0, r1, r2              ; 7
         stm     r3                      ; 5
         pop     r0, r1, r2              ; 6   the quotient, with p into r5 to
         pop     r3, r5                  ; 5   step over it
@@ -1558,10 +1555,10 @@ __moddi3:
         push    lr                      ; 5
         call    __divmoddi4.signed      ; 3
         pop     lr                      ; 4
-        mov     r2, sp                  ; 1   ldm loads through r2, so its
-        ldm     r0, r1                  ; 5   own word goes to r5 first:
-        ldm     r5, r3                  ; 5   r5 is free at the return
-        mov     r2, r5                  ; 1
+        mov     r1, sp                  ; 1   ldm loads through r1, so its
+        ldm     r0, r5                  ; 5   own word goes to r5 first:
+        ldm     r2, r3                  ; 5   r5 is free at the return
+        mov     r1, r5                  ; 1
         ret                             ; 4
 
 ; ============================================================================
@@ -1812,9 +1809,8 @@ __udivmoddi4_mul:
         shl     r2, r2, r3              ; 1
         or      r0, r0, r2              ; 1
         lsr     r1, r1, r4              ; 1
-        mov     r2, r1                  ; 1   the remainder, through r1 for
-        mov     r1, r5                  ; 1   stm; d's top words are zero
-        stm     r0, r2                  ; 6   already
+        stm     r0, r1                  ; 6   the remainder, through p; d's
+                                        ;     top words are zero already
         add     sp, sp, #2              ; 1   v
         pop     r0                      ; 4   the quotient
         pop     r1, r2                  ; 5
@@ -1849,11 +1845,10 @@ __udivmoddi4_mul:
         push    r5                      ; 5   R5 = 0
         push    r4, r3, r2              ; 7   R4 R3 R2
         push    r1, r0                  ; 6   R1 R0
-        ld      r5, [sp, #12]           ; 4   p
-        ld      r0, [r5, #0]            ; 4
-        ld      r1, [r5, #2]            ; 4
-        ld      r2, [r5, #4]            ; 4
-        ld      r3, [r5, #6]            ; 4
+        ld      r1, [sp, #12]           ; 4   p, for ldm; its own word goes
+        ldm     r0, r4, r2              ; 6   by r4, free until j
+        ldm     r3                      ; 4
+        mov     r1, r4                  ; 1
         mov     r4, #0                  ; 1   one quotient word, j = 0
         jmpr    .bd                     ; 3
 .w1:
@@ -1876,11 +1871,10 @@ __udivmoddi4_mul:
         push    r1, r0                  ; 6   R2 R1
         mov     r4, #0                  ; 1
         push    r4                      ; 5   R0 = 0
-        ld      r5, [sp, #12]           ; 4   p
+        ld      r1, [sp, #12]           ; 4   p, for ldm: d0 goes by r4
+        ldm     r4, r2, r3              ; 6
+        mov     r1, r4                  ; 1
         mov     r0, #0                  ; 1
-        ld      r1, [r5, #0]            ; 4
-        ld      r2, [r5, #2]            ; 4
-        ld      r3, [r5, #4]            ; 4
         mov     r4, #2                  ; 1   two quotient words, j = 1
 .bd:
         push    r4                      ; 5   2j
@@ -1979,10 +1973,9 @@ __udivmoddi4_mul:
         ld      r3, [r4, #18]           ; 4   r1 as it was
         br      hi, r1, r3, .back       ; 1   rare
 .bst:
-        mov     r3, r1                  ; 1   the remainder so far, through
-        add     r1, r4, #12             ; 1   r1 for stm
-        stm     r2, lr, r0              ; 7
-        stm     r3                      ; 5
+        add     r5, r4, #12             ; 1   the remainder so far, through
+        stm     r2, lr, r0              ; 7   r5, free until the next q_j
+        stm     r1                      ; 5
         ld      r4, [sp, #10]           ; 4
         add     r4, r4, #-2             ; 1   the next word down
         st      r4, [sp, #10]           ; 5
@@ -2023,10 +2016,8 @@ __udivmoddi4_mul:
         shl     r5, r5, lr              ; 1
         or      r2, r2, r5              ; 1
         lsr     r3, r3, r4              ; 1
-        ld      r5, [sp, #24]           ; 4   p
-        mov     lr, r1                  ; 1   through r1 for stm
-        mov     r1, r5                  ; 1
-        stm     r0, lr, r2              ; 7
+        ld      r5, [sp, #24]           ; 4   p, stm's pointer
+        stm     r0, r1, r2              ; 7
         stm     r3                      ; 5
         add     sp, sp, #20             ; 1   the quotient, R5:R4, popped
         pop     r0, r1, r5              ; 6   with p into r5 to step over it
@@ -2079,10 +2070,10 @@ __umoddi3_mul:
         push    lr                      ; 5
         call    __udivmoddi4_mul.core   ; 3
         pop     lr                      ; 4
-        mov     r2, sp                  ; 1   ldm loads through r2, so its
-        ldm     r0, r1                  ; 5   own word goes to r5 first:
-        ldm     r5, r3                  ; 5   r5 is free at the return
-        mov     r2, r5                  ; 1
+        mov     r1, sp                  ; 1   ldm loads through r1, so its
+        ldm     r0, r5                  ; 5   own word goes to r5 first:
+        ldm     r2, r3                  ; 5   r5 is free at the return
+        mov     r1, r5                  ; 1
         ret                             ; 4
 
 ; The signed three: __divmoddi4's wrapper word for word, around the core
@@ -2123,28 +2114,26 @@ __divmoddi4_mul:
 .npos:
         push    r3, r2, r1              ; 7   |n|, while d is fetched
         push    r0                      ; 5
-        ld      r0, [r5, #0]            ; 4
-        ld      r1, [r5, #2]            ; 4
-        ld      r2, [r5, #4]            ; 4
-        ld      r3, [r5, #6]            ; 4
+        mov     r1, r5                  ; 1   d, through ldm's r1, whose own
+        ldm     r0, lr, r2              ; 6   word goes by lr: free here
+        ldm     r3                      ; 4
+        mov     r1, lr                  ; 1
         brclr   r3, #0x8000, .dpos      ; 3+1
         call    .neg                    ; 3   |d|
 .dpos:
         push    r3, r2, r1              ; 7   |d| below |n|, where the core
         push    r0                      ; 5   can have it
-        ld      r0, [sp, #8]            ; 4
-        ld      r1, [sp, #10]           ; 4
-        ld      r2, [sp, #12]           ; 4
-        ld      r3, [sp, #14]           ; 4
+        add     r1, sp, #8              ; 1   |n| back, the same way
+        ldm     r0, lr, r2              ; 6
+        ldm     r3                      ; 4
+        mov     r1, lr                  ; 1
         mov     r5, sp                  ; 1
         call    __udivmoddi4_mul.core   ; 3
         brclr   r4, #0x4000, .qpos      ; 3+1
         call    .neg                    ; 3
 .qpos:
-        mov     lr, r1                  ; 1   the quotient over |n|: stm
-        add     r1, sp, #8              ; 1   stores through r1, so r1's own
-                                        ;     word goes from lr
-        stm     r0, lr, r2              ; 7
+        add     r5, sp, #8              ; 1   the quotient over |n|
+        stm     r0, r1, r2              ; 7
         stm     r3                      ; 5
         pop     r0, r1, r2              ; 6   and the remainder popped out of
         pop     r3                      ; 4   |d|'s slots
@@ -2152,9 +2141,7 @@ __divmoddi4_mul:
         call    .neg                    ; 3
 .rpos:
         ld      r5, [sp, #8]            ; 4   p
-        mov     lr, r1                  ; 1
-        mov     r1, r5                  ; 1
-        stm     r0, lr, r2              ; 7
+        stm     r0, r1, r2              ; 7
         stm     r3                      ; 5
         pop     r0, r1, r2              ; 6   the quotient, with p into r5 to
         pop     r3, r5                  ; 5   step over it
@@ -2189,10 +2176,10 @@ __moddi3_mul:
         push    lr                      ; 5
         call    __divmoddi4_mul.signed  ; 3
         pop     lr                      ; 4
-        mov     r2, sp                  ; 1   ldm loads through r2, so its
-        ldm     r0, r1                  ; 5   own word goes to r5 first:
-        ldm     r5, r3                  ; 5   r5 is free at the return
-        mov     r2, r5                  ; 1
+        mov     r1, sp                  ; 1   ldm loads through r1, so its
+        ldm     r0, r5                  ; 5   own word goes to r5 first:
+        ldm     r2, r3                  ; 5   r5 is free at the return
+        mov     r1, r5                  ; 1
         ret                             ; 4
 
 ; ============================================================================
