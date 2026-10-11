@@ -127,8 +127,18 @@ extern size_t reg_info_p_size;
 /* Compute register frequency from the BB frequency.  When optimizing for size,
    or profile driven feedback is available and the function is never executed,
    frequency is always equivalent.  Otherwise rescale the basic block
-   frequency.  */
-#define REG_FREQ_FROM_BB(bb) ((optimize_function_for_size_p (cfun)	      \
+   frequency.
+
+   A target can define REG_FREQ_FLAT_FOR_SIZE to 0 to keep the blocks'
+   frequencies when optimizing for size too.  With few registers, a spill
+   inside a loop costs more than the bytes it saves: the flat weights
+   cannot tell an inner loop from a prologue.  */
+#ifndef REG_FREQ_FLAT_FOR_SIZE
+#define REG_FREQ_FLAT_FOR_SIZE 1
+#endif
+
+#define REG_FREQ_FROM_BB(bb) (((optimize_function_for_size_p (cfun)	      \
+			       && REG_FREQ_FLAT_FOR_SIZE)		      \
 			       || !cfun->cfg->count_max.initialized_p ())     \
 			      ? REG_FREQ_MAX				      \
 			      : ((bb)->count.to_frequency (cfun)	      \

@@ -136,6 +136,14 @@
 #include "rtl-iter.h"
 #include "hash-set.h"
 
+/* Whether to inherit reloads when optimizing for size.  Inheritance can add
+   a move, so it is off for size by default; a target with few registers,
+   where it mostly saves a reload from the stack instead, can define this
+   to 1.  */
+#ifndef LRA_INHERIT_FOR_SIZE
+#define LRA_INHERIT_FOR_SIZE 0
+#endif
+
 /* Value of LRA_CURR_RELOAD_NUM at the beginning of BB of the current
    insn.  Remember that LRA_CURR_RELOAD_NUM is the number of emitted
    reload insns.  */
@@ -6136,7 +6144,7 @@ static bool
 inherit_reload_reg (bool def_p, int original_regno,
 		    enum reg_class cl, rtx_insn *insn, rtx next_usage_insns)
 {
-  if (optimize_function_for_size_p (cfun))
+  if (optimize_function_for_size_p (cfun) && !LRA_INHERIT_FOR_SIZE)
     return false;
 
   enum reg_class rclass = lra_get_allocno_class (original_regno);

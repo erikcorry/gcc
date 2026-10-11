@@ -194,6 +194,23 @@
   { FRUCTUS_R0, FRUCTUS_R1, FRUCTUS_R5, FRUCTUS_R2, FRUCTUS_R3, \
     FRUCTUS_R4, FRUCTUS_LR, FRUCTUS_SP, FRUCTUS_SFP, FRUCTUS_SAP }
 
+/* -Os ALLOCATES BY THE BLOCKS' FREQUENCIES AND INHERITS RELOADS, as -O2
+   does.  GCC's defaults for size do neither: every block weighs the same,
+   so a spill in an inner loop costs no more than one in the prologue, and a
+   spilled value is reloaded at every use.  Both assume spills are rare,
+   which with seven registers, lr among them, they are not.  In CoreMark's
+   matrix multiply at -Os the 32-bit accumulator lived on the stack - 11
+   loads and 4 stores a step against -O2's 4 and none, in the same bytes.
+
+   With both, CoreMark at -Os -mmul goes from 0.690 to 0.860 CoreMark/MHz
+   and its image from 8578 to 8558 bytes; the C execute torture tests at -Os
+   are 0.2% smaller, SOMpp's interpreter 0.6% bigger (100 bytes).
+   Inheritance alone is smaller everywhere and costs nothing; the
+   frequencies are the speed, and cost the bytes.  Measured with
+   tools/profile.mjs in the parent repository.  */
+#define REG_FREQ_FLAT_FOR_SIZE 0
+#define LRA_INHERIT_FOR_SIZE 1
+
 /* CALL_TARGET_REGS is every register but lr, for the target of `call ra':
    the call writes lr before it jumps, so `call lr' goes to the instruction
    after it.  Only the call patterns ask for it, and REGNO_REG_CLASS still

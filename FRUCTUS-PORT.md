@@ -77,6 +77,15 @@ that compiled callees keep exactly the registers `isa/abi.s` says they keep.
   `jmp r5`, one byte, and touches lr not at all — so a leaf function with a
   switch table no longer saves it. r4 is a frame pointer only when the frame
   has a variable size.
+- **`-Os` allocates registers as `-O2` does**, the port's one change outside
+  `config/fructus`. For size, GCC weighs every block alike, so a spill in an
+  inner loop looks no dearer than one in the prologue, and it turns off LRA's
+  reload inheritance, so a spilled value is reloaded at every use. Both assume
+  spills are rare; with seven registers, lr among them, they are not. Two
+  macros, defaulting to GCC's behaviour everywhere else, let `fructus.h` turn
+  both off: `REG_FREQ_FLAT_FOR_SIZE` in `regs.h` and `LRA_INHERIT_FOR_SIZE` in
+  `lra-constraints.cc`. CoreMark at `-Os -mmul` goes from 0.690 to 0.860
+  CoreMark/MHz in fewer bytes; `fructus.h` has the rest of the figures.
 - **Words aligned to two**, as the ABI says: char is byte aligned, every
   wider type 2-byte aligned, structs laid out conventionally, and sp always
   even - a byte argument takes a word slot and is pushed with `push`.
