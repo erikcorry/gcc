@@ -41,6 +41,7 @@ extern unsigned int fructus_data_alignment (tree, unsigned int);
 extern bool fructus_alu_imm_p (enum rtx_code, HOST_WIDE_INT, bool);
 extern bool fructus_zp_address_p (rtx);
 extern bool fructus_zp_offset_p (rtx);
+extern bool fructus_brmask_p (HOST_WIDE_INT);
 extern bool fructus_cbranch_imm_p (enum rtx_code, machine_mode,
 				   HOST_WIDE_INT);
 extern bool fructus_cbranch_ok_p (rtx, enum rtx_code, machine_mode);

@@ -218,10 +218,95 @@ fructus_condimm_index (enum rtx_code code, machine_mode mode, HOST_WIDE_INT k)
   return -1;
 }
 
+/* The truth set of `(x & M) == 0', or of `!= 0' if SET, when it is an
+   interval.  The x that fit inside ~M form one only when ~M is a run of low
+   ones: [0, 2^n) for the clear test and the rest of the circle for the set.  */
+
+static bool
+fructus_mask_interval (HOST_WIDE_INT m, bool set, HOST_WIDE_INT *start,
+		       HOST_WIDE_INT *len)
+{
+  const HOST_WIDE_INT u = ~m & 0xffff, run = u + 1;
+
+  if (run & u)
+    return false;
+  if (!set)
+    *start = 0, *len = run;
+  else
+    *start = run & 0xffff, *len = 0x10000 - run;
+  if (*len == 0)
+    *start = 0;
+  return true;
+}
+
+/* brclr and brset ask whether %0 & mask is zero, and when the mask is a run
+   of high ones that is a comparison: `x <u 256' is `brclr #0xff00', `x < 0'
+   is `brset #0x8000'.  condimm5 holds no such twin - check.js refuses one -
+   so a comparison it lacks may still be a single mask branch, and a mask
+   neither table holds may still be a condimm5 entry.  Both are found by
+   comparing truth sets, the way gas finds them (tools/brequiv.js).  */
+
+/* The encodable mask whose test, clear or SET, is CODE against K; 0 if none.
+   0 is never a mask anyone branches on.  */
+
+static HOST_WIDE_INT
+fructus_cond_mask (enum rtx_code code, HOST_WIDE_INT k, bool *set)
+{
+  HOST_WIDE_INT s0, l0, s1, l1;
+
+  if (!fructus_truth_set (code, 16, k, &s0, &l0))
+    return 0;
+  for (int pass = 0; pass < 2; pass++)
+    {
+      const int *tab = pass ? fructus_immask5 : fructus_immbit5;
+      for (unsigned i = 0; i < 32; i++)
+	for (int sense = 0; sense < 2; sense++)
+	  if (fructus_mask_interval (tab[i], sense, &s1, &l1)
+	      && s0 == s1 && l0 == l1)
+	    {
+	      *set = sense;
+	      return tab[i] & 0xffff;
+	    }
+    }
+  return 0;
+}
+
+/* The condimm5 entry whose test is `(x & M) != 0' if SET, `== 0' if not;
+   -1 if none.  */
+
+static int
+fructus_mask_condimm (HOST_WIDE_INT m, bool set)
+{
+  HOST_WIDE_INT s0, l0, s1, l1;
+
+  if (!fructus_mask_interval (m, set, &s0, &l0))
+    return -1;
+  for (unsigned i = 0; i < ARRAY_SIZE (fructus_condimm5); i++)
+    if (fructus_truth_set (fructus_cond3_code (fructus_condimm5[i].cond),
+			   16, fructus_condimm5[i].imm, &s1, &l1)
+	&& s0 == s1 && l0 == l1)
+      return i;
+  return -1;
+}
+
 bool
 fructus_cbranch_imm_p (enum rtx_code code, machine_mode mode, HOST_WIDE_INT k)
 {
-  return fructus_condimm_index (code, mode, k) >= 0;
+  bool set;
+  return (fructus_condimm_index (code, mode, k) >= 0
+	  || fructus_cond_mask (code, k, &set) != 0);
+}
+
+/* Whether a brclr or brset can test M, in both senses - the inverted branch
+   a long jump needs is the other one.  Either from a mask table or as the
+   condimm5 entry that asks the same.  */
+
+bool
+fructus_brmask_p (HOST_WIDE_INT m)
+{
+  return (fructus_mask5_p (m)
+	  || (fructus_mask_condimm (m & 0xffff, false) >= 0
+	      && fructus_mask_condimm (m & 0xffff, true) >= 0));
 }
 
 /* Whether a branch on CODE with second operand OP has a single instruction.
@@ -252,9 +337,10 @@ fructus_cond_name (enum rtx_code code)
     }
 }
 
-/* The operands of a compare-and-branch testing CODE, as assembler text with
-   %0 and %1 left for output_asm_insn.  False when no single instruction
-   tests it.  */
+/* A compare-and-branch testing CODE, as assembler text with %0 and %1 left
+   for output_asm_insn and the target to follow.  False when no single
+   instruction tests it.  The text names the instruction, which is a mask
+   branch when the comparison is its twin.  */
 
 static bool
 fructus_cond_text (char *buf, size_t size, enum rtx_code code,
@@ -262,14 +348,22 @@ fructus_cond_text (char *buf, size_t size, enum rtx_code code,
 {
   if (!CONST_INT_P (op))
     {
-      snprintf (buf, size, "%s, %%0, %%1", fructus_cond_name (code));
+      snprintf (buf, size, "br\t%s, %%0, %%1", fructus_cond_name (code));
       return true;
     }
   int i = fructus_condimm_index (code, mode, INTVAL (op));
-  if (i < 0)
+  if (i >= 0)
+    {
+      snprintf (buf, size, "br\t%s, %%0, #%d", fructus_condimm5[i].cond,
+		fructus_condimm5[i].imm);
+      return true;
+    }
+  bool set;
+  HOST_WIDE_INT m = fructus_cond_mask (code, INTVAL (op), &set);
+  if (m == 0)
     return false;
-  snprintf (buf, size, "%s, %%0, #%d", fructus_condimm5[i].cond,
-	    fructus_condimm5[i].imm);
+  snprintf (buf, size, "%s\t%%0, #0x%04x", set ? "brset" : "brclr",
+	    (unsigned) m);
   return true;
 }
 
@@ -291,35 +385,51 @@ fructus_output_cbranch (rtx *operands, enum rtx_code code, machine_mode mode,
 {
   static char buf[160];
   char c[40], nc[40];
-  const char *mn = "br";
   enum rtx_code cc = invert ? reverse_condition (code) : code;
   bool c_ok = fructus_cond_text (c, sizeof c, cc, mode, operands[1]);
   bool nc_ok = fructus_cond_text (nc, sizeof nc, reverse_condition (cc), mode,
 				  operands[1]);
 
   if (c_ok && length == 3)
-    snprintf (buf, sizeof buf, "%s\t%s, %%l2", mn, c);
+    snprintf (buf, sizeof buf, "%s, %%l2", c);
   else if (nc_ok)
-    snprintf (buf, sizeof buf, "%s\t%s, .Lb%%=\n\tjmp\t%%l2\n.Lb%%=:", mn, nc);
+    snprintf (buf, sizeof buf, "%s, .Lb%%=\n\tjmp\t%%l2\n.Lb%%=:", nc);
   else
     {
       gcc_assert (c_ok);
       snprintf (buf, sizeof buf,
-		"%s\t%s, .Lt%%=\n\tjmpr\t.Lf%%=\n.Lt%%=:\n\tjmp\t%%l2\n.Lf%%=:",
-		mn, c);
+		"%s, .Lt%%=\n\tjmpr\t.Lf%%=\n.Lt%%=:\n\tjmp\t%%l2\n.Lf%%=:",
+		c);
     }
   return buf;
 }
 
-/* brset / brclr: taken when %0 & %1 is non-zero if SET, zero otherwise.  */
+/* brset / brclr: taken when %0 & %1 is non-zero if SET, zero otherwise.
+   A mask neither table holds is the condimm5 entry that asks the same -
+   fructus_brmask_p let it in only if one does, in both senses.  */
 
 const char *
 fructus_output_bitbranch (rtx *operands, bool set, int length)
 {
+  static char buf[96];
+  HOST_WIDE_INT m = INTVAL (operands[1]) & 0xffff;
+  bool s = length == 3 ? set : !set;
+  char test[40];
+
+  if (fructus_mask5_p (m))
+    snprintf (test, sizeof test, "%s\t%%0, #%%1", s ? "brset" : "brclr");
+  else
+    {
+      int i = fructus_mask_condimm (m, s);
+      gcc_assert (i >= 0);
+      snprintf (test, sizeof test, "br\t%s, %%0, #%d",
+		fructus_condimm5[i].cond, fructus_condimm5[i].imm);
+    }
   if (length == 3)
-    return set ? "brset\t%0, #%1, %l2" : "brclr\t%0, #%1, %l2";
-  return (set ? "brclr\t%0, #%1, .Lb%=\n\tjmp\t%l2\n.Lb%=:"
-	  : "brset\t%0, #%1, .Lb%=\n\tjmp\t%l2\n.Lb%=:");
+    snprintf (buf, sizeof buf, "%s, %%l2", test);
+  else
+    snprintf (buf, sizeof buf, "%s, .Lb%%=\n\tjmp\t%%l2\n.Lb%%=:", test);
+  return buf;
 }
 
 /* ==========================================================================

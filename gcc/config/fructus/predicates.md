@@ -52,6 +52,12 @@
   (and (match_code "const_int")
        (match_test "fructus_mask5_p (INTVAL (op))")))
 
+;; What brclr and brset test: a mask table entry, or a mask whose test is a
+;; condimm5 entry - `(x & 0xfff8) == 0' is `br lo, x, #8'.
+(define_predicate "fructus_brmask_operand"
+  (and (match_code "const_int")
+       (match_test "fructus_brmask_p (INTVAL (op))")))
+
 (define_predicate "fructus_bitpos_operand"
   (and (match_code "const_int")
        (match_test "IN_RANGE (INTVAL (op), 0, 15)")))

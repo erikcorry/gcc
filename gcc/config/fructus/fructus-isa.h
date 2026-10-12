@@ -35,11 +35,11 @@ static const int fructus_immask5[32] = {
 
 struct fructus_condimm { const char *cond; int imm; };
 
-static const struct fructus_condimm fructus_condimm5[32] = {
+static const struct fructus_condimm fructus_condimm5[30] = {
   { "eq", 0 },
   { "ne", 0 },
-  { "lt", 0 },
-  { "ge", 0 },
+  { "eq", 4 },
+  { "ne", 4 },
   { "eq", 1 },
   { "ne", 1 },
   { "lt", 1 },
@@ -58,16 +58,14 @@ static const struct fructus_condimm fructus_condimm5[32] = {
   { "ge", 32766 },
   { "lt", -32767 },
   { "lt", -32766 },
-  { "lo", 2 },
-  { "hs", 2 },
+  { "lo", 10 },
+  { "hs", 10 },
   { "hs", 3 },
-  { "lo", 4 },
-  { "hs", 4 },
+  { "lo", 32 },
+  { "hs", 32 },
   { "lo", 6 },
   { "lo", 8 },
-  { "hs", 8 },
-  { "lo", 256 },
-  { "hs", 256 }
+  { "hs", 8 }
 };
 
 #endif /* GCC_FRUCTUS_ISA_H */

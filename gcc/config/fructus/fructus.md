@@ -738,7 +738,7 @@
 (define_insn "*brmask_<code>"
   [(set (pc)
 	(if_then_else (eqne (and:HI (match_operand:HI 0 "register_operand" "r")
-				    (match_operand:HI 1 "fructus_mask_operand" "K"))
+				    (match_operand:HI 1 "fructus_brmask_operand" "n"))
 			    (const_int 0))
 		      (label_ref (match_operand 2 ""))
 		      (pc)))]
@@ -755,7 +755,7 @@
 (define_insn "*brmask_<code>_rev"
   [(set (pc)
 	(if_then_else (eqne (and:HI (match_operand:HI 0 "register_operand" "r")
-				    (match_operand:HI 1 "fructus_mask_operand" "K"))
+				    (match_operand:HI 1 "fructus_brmask_operand" "n"))
 			    (const_int 0))
 		      (pc)
 		      (label_ref (match_operand 2 ""))))]
