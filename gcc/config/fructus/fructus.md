@@ -542,8 +542,11 @@
 })
 
 ;; -------------------------------------------------------------------------
-;; Predicates as values: iseq and isset.  Only == and != exist, so the
-;; other comparisons FAIL and are done with branches.
+;; Predicates as values: iseq, isset and ishi.  == and != are iseq; the
+;; unsigned four are ishi, register against register, the two inclusive ones
+;; inverted by an xor - which is also how a multi-word add's carry, ltu of
+;; the sum against an addend, avoids a branch.  The signed comparisons FAIL
+;; and are done with branches.
 ;; -------------------------------------------------------------------------
 
 (define_expand "cstorehi4"
@@ -553,11 +556,37 @@
 	   (match_operand:HI 3 "nonmemory_operand")]))]
   ""
 {
-  if (GET_CODE (operands[1]) != EQ && GET_CODE (operands[1]) != NE)
-    FAIL;
-  if (!fructus_imm10_operand (operands[3], HImode))
-    operands[3] = force_reg (HImode, operands[3]);
+  switch (GET_CODE (operands[1]))
+    {
+    case EQ: case NE:
+      if (!fructus_imm10_operand (operands[3], HImode))
+	operands[3] = force_reg (HImode, operands[3]);
+      break;
+    case LTU: case GTU: case LEU: case GEU:
+      operands[3] = force_reg (HImode, operands[3]);
+      break;
+    default:
+      FAIL;
+    }
 })
+
+;; ishi d, a, b is a > b; a < b is the same with the sources exchanged, and
+;; the inclusive pair is the strict one's complement.
+(define_code_iterator ucmp [gtu ltu geu leu])
+(define_code_attr ucmp_asm
+  [(gtu "ishi\t%0, %1, %2")
+   (ltu "ishi\t%0, %2, %1")
+   (leu "ishi\t%0, %1, %2\n\txor\t%0, %0, #1")
+   (geu "ishi\t%0, %2, %1\n\txor\t%0, %0, #1")])
+(define_code_attr ucmp_inv [(gtu "false") (ltu "false") (leu "true") (geu "true")])
+
+(define_insn "*s<code>"
+  [(set (match_operand:HI 0 "register_operand" "=r")
+	(ucmp:HI (match_operand:HI 1 "register_operand" "r")
+		 (match_operand:HI 2 "register_operand" "r")))]
+  ""
+  "<ucmp_asm>"
+  [(set (attr "length") (symbol_ref "fructus_ishi_length (operands, <ucmp_inv>)"))])
 
 (define_insn "*seq"
   [(set (match_operand:HI 0 "register_operand" "=r")

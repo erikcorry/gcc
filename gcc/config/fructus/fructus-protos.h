@@ -55,6 +55,7 @@ extern int fructus_double_move_length (rtx *);
 extern int fructus_alu_length (enum rtx_code, rtx *);
 extern int fructus_rsb_length (rtx *);
 extern int fructus_iseq_length (rtx *, bool);
+extern int fructus_ishi_length (rtx *, bool);
 
 extern bool fructus_expand_move (rtx *, machine_mode);
 extern bool fructus_expand_word_shift (rtx *, enum rtx_code);

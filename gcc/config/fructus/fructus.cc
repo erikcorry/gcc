@@ -644,6 +644,15 @@ fructus_iseq_length (rtx *operands, bool ne)
   return len;
 }
 
+/* ishi is two bytes; the inclusive comparisons add the xor that inverts it,
+   one byte into r0 and two otherwise, as fructus_iseq_length's != does.  */
+
+int
+fructus_ishi_length (rtx *operands, bool inv)
+{
+  return 2 + (!inv ? 0 : fructus_reg_is (operands[0], 0) ? 1 : 2);
+}
+
 /* ==========================================================================
    Output templates that depend on the operands
    ========================================================================== */
