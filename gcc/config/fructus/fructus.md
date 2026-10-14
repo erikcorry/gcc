@@ -116,13 +116,15 @@
    (set (mem:QI (plus:HI (reg:HI SP_REGNUM) (const_int -2)))
 	(match_operand:QI 0 "fructus_push_operand" "r"))]
   ""
-  "push\t%0")
+  "push\t%0"
+  [(set (attr "length") (symbol_ref "fructus_push_length (operands[0])"))])
 
 (define_insn "pushhi1"
   [(set (mem:HI (pre_dec:HI (reg:HI SP_REGNUM)))
 	(match_operand:HI 0 "fructus_push_operand" "r"))]
   ""
-  "push\t%0")
+  "push\t%0"
+  [(set (attr "length") (symbol_ref "fructus_push_length (operands[0])"))])
 
 ;; High word first, so that it lands higher: little endian in memory.
 (define_insn "push<mode>1"
@@ -157,7 +159,8 @@
   [(set (match_operand:HI 0 "register_operand" "=r")
 	(mem:HI (post_inc:HI (reg:HI SP_REGNUM))))]
   ""
-  "pop\t%0")
+  "pop\t%0"
+  [(set (attr "length") (symbol_ref "fructus_pop_length (operands[0])"))])
 
 (define_insn "fructus_pop2"
   [(set (match_operand:HI 0 "register_operand" "=r")
@@ -276,7 +279,8 @@
   "@
    <shift_insn>\t%0, %1, #%2
    <shift_insn>\t%0, %1, #%2
-   <shift_insn>\t%0, %1, %2")
+   <shift_insn>\t%0, %1, %2"
+  [(set (attr "length") (symbol_ref "fructus_alu_length (<CODE>, operands)"))])
 
 ;; A 64-bit shift by 16, 32 or 48 is register moves, which GCC does not find
 ;; on its own: it expands a two-word shift inline and calls a libcall for a
@@ -808,11 +812,13 @@
 		      (const_int 2) (const_int 3)))])
 
 ;; A jump through a register is `jmp ra' in two bytes, so the allocator picks
-;; the register and nothing has to be moved first.  It used to be `jmp r5' in
-;; one byte, and the byte it saved was charged back in allocation: every
-;; indirect jump had to get its address into the one register the assembler
-;; may also clobber.  Both spellings cost three cycles - what the instruction
-;; pays for is reading a register, not fetching a byte.
+;; the register and nothing has to be moved first - and `jmp r5' in one, when
+;; it picks r5.  It used to be r5 alone, and the byte it saved was charged back
+;; in allocation: every indirect jump had to get its address into the one
+;; register the assembler may also clobber.  Both spellings cost three cycles -
+;; what the instruction pays for is reading a register, not fetching a byte -
+;; so the allocator is left free, and a target that is in r5 anyway, as an
+;; indirect tail call's always is, saves the byte.
 ;;
 ;; Before either existed the sequence was `mov lr, ra' and `ret', which cost
 ;; the same three bytes but DESTROYED THE RETURN ADDRESS, so a function with a
@@ -822,14 +828,14 @@
   [(set (pc) (match_operand:HI 0 "register_operand" "r"))]
   ""
   "jmp\t%0"
-  [(set_attr "length" "2")])
+  [(set (attr "length") (symbol_ref "fructus_indirect_length (operands[0])"))])
 
 (define_insn "tablejump"
   [(set (pc) (match_operand:HI 0 "register_operand" "r"))
    (use (label_ref (match_operand 1 "")))]
   ""
   "jmp\t%0"
-  [(set_attr "length" "2")])
+  [(set (attr "length") (symbol_ref "fructus_indirect_length (operands[0])"))])
 
 ;; -------------------------------------------------------------------------
 ;; Calls.  Each carries its callee's ABI id, from the end-marker cookie,
@@ -855,7 +861,10 @@
 		   UNSPEC_CALLEE_CC))]
   "!SIBLING_CALL_P (insn)"
   "call\t%0"
-  [(set_attr "length" "3,2")])
+  [(set (attr "length")
+	(if_then_else (match_test "REG_P (operands[0])")
+		      (symbol_ref "fructus_indirect_length (operands[0])")
+		      (const_int 3)))])
 
 (define_expand "call_value"
   [(parallel [(set (match_operand 0 "")
@@ -877,7 +886,10 @@
 		   UNSPEC_CALLEE_CC))]
   "!SIBLING_CALL_P (insn)"
   "call\t%1"
-  [(set_attr "length" "3,2")])
+  [(set (attr "length")
+	(if_then_else (match_test "REG_P (operands[1])")
+		      (symbol_ref "fructus_indirect_length (operands[1])")
+		      (const_int 3)))])
 
 ;; -------------------------------------------------------------------------
 ;; Tail calls.  A tail call is a jump, so the callee's `ret' returns to OUR
@@ -926,7 +938,7 @@
 		   UNSPEC_CALLEE_CC))]
   "SIBLING_CALL_P (insn)"
   "jmp\tr5"
-  [(set_attr "length" "2")])
+  [(set_attr "length" "1")])
 
 (define_insn "*sibcall"
   [(call (mem:QI (match_operand:HI 0 "fructus_sibcall_operand" "i"))
@@ -962,7 +974,7 @@
 		   UNSPEC_CALLEE_CC))]
   "SIBLING_CALL_P (insn)"
   "jmp\tr5"
-  [(set_attr "length" "2")])
+  [(set_attr "length" "1")])
 
 (define_insn "*sibcall_value"
   [(set (match_operand 0 "" "")

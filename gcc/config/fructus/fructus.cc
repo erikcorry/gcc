@@ -478,6 +478,10 @@ fructus_mem_length (rtx reg, rtx mem, bool load)
 
   if (load && off == 0 && fructus_reg_is (reg, 0) && fructus_reg_is (base, 0))
     return 1;
+  /* ld r0, [sp, #0] and st r0, [sp, #0]: the first argument or the return
+     value spilled to the top of the stack and back.  */
+  if (off == 0 && fructus_reg_is (reg, 0) && fructus_reg_is (base, FRUCTUS_SP))
+    return 1;
   if (load && fructus_same_reg_p (reg, base) && fructus_imm5_p (off))
     return 2;
   if (fructus_imm3_p (off))
@@ -494,18 +498,45 @@ fructus_move_length (rtx *operands)
     return fructus_mem_length (s, d, false);
   if (MEM_P (s))
     return fructus_mem_length (d, s, true);
+  /* mov r0, r1, mov r1, r0 and mov r2, r0 have one-byte encodings.  */
   if (REG_P (s))
     return ((fructus_reg_is (d, 0) && fructus_reg_is (s, 1))
-	    || (fructus_reg_is (d, 1) && fructus_reg_is (s, 0))) ? 1 : 2;
+	    || (fructus_reg_is (d, 1) && fructus_reg_is (s, 0))
+	    || (fructus_reg_is (d, 2) && fructus_reg_is (s, 0))) ? 1 : 2;
   if (CONST_INT_P (s))
     {
       HOST_WIDE_INT v = INTVAL (s);
-      if (v == 0 && fructus_reg_is (d, 0))
+      /* So do mov rN, #0 for r0 to r3, and mov r0, #1.  */
+      if (v == 0 && REG_P (d) && REGNO (d) <= (unsigned) FRUCTUS_REGNO (3))
+	return 1;
+      if (v == 1 && fructus_reg_is (d, 0))
 	return 1;
       if (fructus_imm5_p (v) || fructus_mask5_p (v))
 	return 2;
     }
   return 3;
+}
+
+/* push r0 and push lr, pop r2 and pop lr have one-byte encodings.  */
+
+int
+fructus_push_length (rtx reg)
+{
+  return fructus_reg_is (reg, 0) || fructus_reg_is (reg, FRUCTUS_LR) ? 1 : 2;
+}
+
+int
+fructus_pop_length (rtx reg)
+{
+  return fructus_reg_is (reg, 2) || fructus_reg_is (reg, FRUCTUS_LR) ? 1 : 2;
+}
+
+/* jmp r5 and call r5 are one byte; any other register is two.  */
+
+int
+fructus_indirect_length (rtx reg)
+{
+  return fructus_reg_is (reg, FRUCTUS_R5) ? 1 : 2;
 }
 
 int
@@ -536,7 +567,11 @@ fructus_alu_length (enum rtx_code code, rtx *operands)
     {
       /* add r0, r0, r1 and add r1, r1, r0 have one-byte encodings, and
 	 fructus_output_alu puts a commutative pair in whichever order
-	 reaches them.  */
+	 reaches them.  It prints add r0, r0, r0 as shl r0, r0, #1, which
+	 is one byte too.  */
+      if (code == PLUS && fructus_reg_is (d, 0)
+	  && fructus_reg_is (a, 0) && fructus_reg_is (b, 0))
+	return 1;
       if (code == PLUS
 	  && ((fructus_reg_is (d, 0)
 	       && ((fructus_reg_is (a, 0) && fructus_reg_is (b, 1))
@@ -553,7 +588,10 @@ fructus_alu_length (enum rtx_code code, rtx *operands)
 
   switch (code)
     {
-    case ASHIFT: case ASHIFTRT: case LSHIFTRT:
+    case ASHIFT:
+      /* shl r0, r0, #1 is one byte.  */
+      return tied && fructus_reg_is (d, 0) && v == 1 ? 1 : 2;
+    case ASHIFTRT: case LSHIFTRT:
       return 2;
     case PLUS:
       if (tied && fructus_reg_is (d, 0) && (v == 1 || v == -1 || v == 2))
@@ -630,6 +668,12 @@ fructus_output_alu (enum rtx_code code, rtx *operands)
       snprintf (buf, sizeof buf, "%s\t%%0, %%1, #%%2", mn);
       return buf;
     }
+
+  /* A doubling is a shift by one, which costs the same and has a one-byte
+     encoding for r0 that add r0, r0, r0 does not.  */
+  if (code == PLUS && fructus_same_reg_p (operands[0], operands[1])
+      && fructus_same_reg_p (operands[0], operands[2]))
+    return "shl\t%0, %0, #1";
 
   /* Commutative, so name the destination first when it is the second source:
      that is the shape the one-byte adds have.  */
