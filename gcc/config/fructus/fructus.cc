@@ -373,7 +373,7 @@ fructus_cond_text (char *buf, size_t size, enum rtx_code code,
 
      3   br c, a, b, L                        in reach, c encodable
      6   br !c, a, b, 1f; jmp L; 1:           !c encodable
-     8   br c, a, b, 1f; jmpr 2f; 1: jmp L; 2:
+     9   br c, a, b, 1f; jmp 2f; 1: jmp L; 2:
 					      only c encodable, out of reach
 
    The conditional branch has an 8-bit displacement and gas does not relax it,
@@ -398,7 +398,7 @@ fructus_output_cbranch (rtx *operands, enum rtx_code code, machine_mode mode,
     {
       gcc_assert (c_ok);
       snprintf (buf, sizeof buf,
-		"%s, .Lt%%=\n\tjmpr\t.Lf%%=\n.Lt%%=:\n\tjmp\t%%l2\n.Lf%%=:",
+		"%s, .Lt%%=\n\tjmp\t.Lf%%=\n.Lt%%=:\n\tjmp\t%%l2\n.Lf%%=:",
 		c);
     }
   return buf;
@@ -1493,7 +1493,7 @@ fructus_insn_callee_abi (const rtx_insn *insn)
 
    It refuses exactly the case libc/memset.s documents by hand: bzero takes
    two arguments, so r2 is callee saved in it, and memset takes three, so r2
-   is an argument there and destroyed.  `mov r2, r1; mov r1, #0; jmpr
+   is an argument there and destroyed.  `mov r2, r1; mov r1, #0; jmp
    memset' would return to bzero's caller with r2 in pieces.
 
    AN INDIRECT CALL IS ASKED THE SAME QUESTION, of the pointer's type - which

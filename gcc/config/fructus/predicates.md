@@ -75,7 +75,7 @@
   (ior (match_code "symbol_ref,label_ref,const,const_int")
        (match_operand 0 "register_operand")))
 
-;; What a tail call can reach with a bare `jmpr', which is an address and not
+;; What a tail call can reach with a bare `jmp', which is an address and not
 ;; a register.  A target that is not one of these is staged in r5 and reached
 ;; with `jmp r5' instead; see the sibcall patterns.
 (define_predicate "fructus_sibcall_operand"

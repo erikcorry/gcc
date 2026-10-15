@@ -677,11 +677,11 @@
 	    (if_then_else
 	      (match_test "fructus_cbranch_ok_p (operands[1],
 				 reverse_condition (<CODE>), HImode)")
-	      (const_int 6) (const_int 8)))
+	      (const_int 6) (const_int 9)))
 	  (if_then_else
 	    (match_test "fructus_cbranch_ok_p (operands[1],
 			       reverse_condition (<CODE>), HImode)")
-	    (const_int 6) (const_int 8))))])
+	    (const_int 6) (const_int 9))))])
 
 ;; The same with the arms exchanged, which is what inverting a jump produces
 ;; when the reversed comparison has no encoding of its own.
@@ -826,19 +826,14 @@
 ;; Jumps
 ;; -------------------------------------------------------------------------
 
-;; There is no wide relative jump: `jmpr' reaches a byte's displacement and
-;; `jmp' reaches everywhere absolutely, in the same three bytes and a cycle
-;; less.  So this picks by distance itself rather than leaving it to gas.
+;; There is no relative jump: `jmp' reaches everywhere absolutely, in three
+;; bytes.  The two-byte `jmpr' that once took a near target went, a byte a
+;; jump being worth less than what it cost decode and a predictor.
 (define_insn "jump"
   [(set (pc) (label_ref (match_operand 0 "" "")))]
   ""
-{
-  return get_attr_length (insn) == 2 ? "jmpr\t%l0" : "jmp\t%l0";
-}
-  [(set (attr "length")
-	(if_then_else (and (ge (minus (match_dup 0) (pc)) (const_int -120))
-			   (le (minus (match_dup 0) (pc)) (const_int 120)))
-		      (const_int 2) (const_int 3)))])
+  "jmp\t%l0"
+  [(set_attr "length" "3")])
 
 ;; A jump through a register is `jmp ra' in two bytes, so the allocator picks
 ;; the register and nothing has to be moved first - and `jmp r5' in one, when
